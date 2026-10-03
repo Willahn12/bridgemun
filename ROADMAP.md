@@ -58,3 +58,11 @@ any signed-in user can read a room's basic state because its code is the actual 
 - Testing online rooms with two real accounts end to end.
 - Composite Firestore indexes: none were needed yet since most queries are sorted client-side
   on purpose (classroom scale), but revisit if a collection grows large.
+- Save research briefings. Right now `/research` (`app/research/page.tsx`) is stateless: the
+  brief only lives in that tab and is gone on reload or navigation. Needs a `research` (or
+  similar) Firestore collection, a save action, and a way to browse past briefings, likely
+  alongside Past chats.
+- Make the research feature more complex and better. Today it's one `/api/research` call that
+  returns a single markdown brief (country's position, red lines, allies, fact-check pointers).
+  Scope out what "better" means: more structured/sourced output, follow-up questions, citations,
+  per-topic depth, tying into the country dataset item above, etc.
