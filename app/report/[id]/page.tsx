@@ -10,7 +10,7 @@ import { useAuth } from "@/lib/auth";
 import {
   MODE_LABEL,
   clearStash,
-  fromRow,
+  getSession,
   saveSession,
   sessionTitle,
   stashKey,
@@ -19,7 +19,6 @@ import {
   type Coach,
   type Session,
 } from "@/lib/sessions";
-import { supabase } from "@/lib/supabase";
 import { toneStyle } from "@/lib/tone";
 
 export default function ReportPage() {
@@ -56,14 +55,9 @@ export default function ReportPage() {
   useEffect(() => {
     if (!user || inStore || fetched !== undefined) return;
     let cancelled = false;
-    supabase()
-      .from("sessions")
-      .select("*")
-      .eq("id", id)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (!cancelled) setFetched(data ? fromRow(data) : null);
-      });
+    getSession(id).then((s) => {
+      if (!cancelled) setFetched(s);
+    });
     return () => {
       cancelled = true;
     };

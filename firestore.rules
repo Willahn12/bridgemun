@@ -1,0 +1,154 @@
+rules_version = '2';
+
+// BridgeMUN Firestore security rules.
+// Collections use camelCase fields, except `rooms` and its subcollections, which keep the
+// original snake_case column names from the earlier Postgres schema (see lib/rooms.ts).
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function membershipId(orgId) {
+      return orgId + '_' + request.auth.uid;
+    }
+
+    function myMembership(orgId) {
+      return get(/databases/$(database)/documents/memberships/$(membershipId(orgId))).data;
+    }
+
+    function isOrgMember(orgId) {
+      return exists(/databases/$(database)/documents/memberships/$(membershipId(orgId)));
+    }
+
+    function isOrgStaff(orgId) {
+      return isOrgMember(orgId) && myMembership(orgId).role in ['admin', 'teacher'];
+    }
+
+    function isOrgAdmin(orgId) {
+      return isOrgMember(orgId) && myMembership(orgId).role == 'admin';
+    }
+
+    function room(roomId) {
+      return get(/databases/$(database)/documents/rooms/$(roomId)).data;
+    }
+
+    function isRoomHost(roomId) {
+      return room(roomId).host_id == request.auth.uid;
+    }
+
+    function isRoomMember(roomId) {
+      return exists(/databases/$(database)/documents/rooms/$(roomId)/members/$(request.auth.uid));
+    }
+
+    // ---------- Profiles ----------
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow write: if signedIn() && uid == request.auth.uid;
+    }
+
+    // ---------- Organizations and roles ----------
+    // Any signed-in user may read basic org info: createOrg/joinOrg look organizations up by
+    // invite code before the caller is a member, and Firestore can't prove a get()-based list
+    // rule here is safe for that query shape, the same reasoning as the `rooms` collection below.
+    match /organizations/{orgId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.name.size() >= 2 && request.resource.data.name.size() <= 120;
+      allow update, delete: if signedIn() && isOrgAdmin(orgId);
+    }
+
+    match /memberships/{id} {
+      // The first clause covers listMyOrgs' `where userId == me` query directly; the second
+      // covers listMembers' `where orgId == X` query (X is pinned by that query's own filter).
+      allow read: if signedIn() && (resource.data.userId == request.auth.uid || isOrgMember(resource.data.orgId));
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && (
+          request.resource.data.role == 'student'
+          || (
+            request.resource.data.role == 'admin'
+            && get(/databases/$(database)/documents/organizations/$(request.resource.data.orgId)).data.createdBy == request.auth.uid
+          )
+        );
+      allow update: if signedIn() && isOrgAdmin(resource.data.orgId);
+      allow delete: if signedIn() && (resource.data.userId == request.auth.uid || isOrgAdmin(resource.data.orgId));
+    }
+
+    // ---------- Saved sessions and reports ----------
+    match /sessions/{id} {
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if signedIn() && (
+        resource.data.userId == request.auth.uid
+        || (resource.data.orgId != null && isOrgStaff(resource.data.orgId))
+      );
+      allow update, delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // ---------- Assignments and submissions ----------
+    // myReminders() queries assignments with `where orgId in [...]`, and listSubmissions()
+    // queries submissions with `where assignmentId in [...]`. Firestore can't prove a
+    // get()-based rule is safe for an `in` query the way it can for a single `==`, so reads
+    // are left open to any signed-in user; writes stay restricted to the right actor below.
+    match /assignments/{id} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && isOrgStaff(request.resource.data.orgId)
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update, delete: if signedIn() && isOrgStaff(resource.data.orgId);
+    }
+
+    match /submissions/{id} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // ---------- Classroom chat ----------
+    match /channels/{id} {
+      allow read: if signedIn() && isOrgMember(resource.data.orgId);
+      allow create: if signedIn() && isOrgStaff(request.resource.data.orgId);
+    }
+
+    match /messages/{id} {
+      allow read: if signedIn()
+        && isOrgMember(get(/databases/$(database)/documents/channels/$(resource.data.channelId)).data.orgId);
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && isOrgMember(get(/databases/$(database)/documents/channels/$(request.resource.data.channelId)).data.orgId);
+      allow delete: if signedIn() && (
+        resource.data.userId == request.auth.uid
+        || isOrgStaff(get(/databases/$(database)/documents/channels/$(resource.data.channelId)).data.orgId)
+      );
+    }
+
+    // ---------- Online rooms ----------
+    // Any signed-in user may read a room's basic state: the 6-character code is the actual
+    // secret for private rooms, the same trust model the old join_room() function used.
+    match /rooms/{roomId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.host_id == request.auth.uid;
+      allow update, delete: if signedIn() && resource.data.host_id == request.auth.uid;
+
+      match /members/{uid} {
+        allow read: if signedIn() && (isRoomMember(roomId) || isRoomHost(roomId) || room(roomId).visibility == 'public');
+        allow write: if signedIn() && uid == request.auth.uid;
+      }
+
+      match /lines/{id} {
+        allow read: if signedIn() && (isRoomMember(roomId) || isRoomHost(roomId));
+        allow create: if signedIn() && isRoomMember(roomId) && (
+          (
+            request.resource.data.kind == 'human'
+            && request.resource.data.user_id == request.auth.uid
+            && room(roomId).status == 'live'
+            && room(roomId).turn_user == request.auth.uid
+          )
+          || (request.resource.data.kind in ['ai', 'chair'] && isRoomHost(roomId))
+        );
+        allow delete: if signedIn() && isRoomHost(roomId);
+      }
+    }
+  }
+}

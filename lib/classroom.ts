@@ -1,8 +1,33 @@
 "use client";
 
-import { supabase } from "@/lib/supabase";
-import { fromRow, type Session } from "@/lib/sessions";
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  onSnapshot,
+  query,
+  serverTimestamp,
+  setDoc,
+  Timestamp,
+  updateDoc,
+  where,
+} from "firebase/firestore";
+import { getSession, type Session } from "@/lib/sessions";
 import type { Org } from "@/lib/orgs";
+import { db } from "@/lib/firebase";
+
+const toIso = (t: unknown) => (t instanceof Timestamp ? t.toDate().toISOString() : null);
+/** Firestore 'in' queries accept at most 30 values, so longer lists are split and merged. */
+async function chunkedIn<T>(ids: string[], run: (chunk: string[]) => Promise<T[]>): Promise<T[]> {
+  if (!ids.length) return [];
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += 30) chunks.push(ids.slice(i, i + 30));
+  const results = await Promise.all(chunks.map(run));
+  return results.flat();
+}
 
 /* ---------- Assignments ---------- */
 
@@ -15,35 +40,27 @@ export interface Assignment {
   createdAt: string;
 }
 
-function toAssignment(r: Record<string, unknown>): Assignment {
+function toAssignment(id: string, r: Record<string, unknown>): Assignment {
   return {
-    id: r.id as string,
-    orgId: r.org_id as string,
+    id,
+    orgId: r.orgId as string,
     title: r.title as string,
     description: (r.description as string) ?? "",
-    dueAt: (r.due_at as string | null) ?? null,
-    createdAt: r.created_at as string,
+    dueAt: toIso(r.dueAt),
+    createdAt: toIso(r.createdAt) ?? new Date().toISOString(),
   };
 }
 
-const fail = (error: { message: string } | null) => {
-  if (error) throw new Error(error.message);
-};
-
 export async function listAssignments(orgId: string): Promise<Assignment[]> {
-  const { data, error } = await supabase()
-    .from("assignments")
-    .select("*")
-    .eq("org_id", orgId)
-    .order("due_at", { ascending: true, nullsFirst: false });
-  fail(error);
-  return (data ?? []).map(toAssignment);
+  const snap = await getDocs(query(collection(db(), "assignments"), where("orgId", "==", orgId)));
+  return snap.docs
+    .map((d) => toAssignment(d.id, d.data()))
+    .sort((a, b) => (a.dueAt ? Date.parse(a.dueAt) : Infinity) - (b.dueAt ? Date.parse(b.dueAt) : Infinity));
 }
 
 export async function getAssignment(id: string): Promise<Assignment | null> {
-  const { data, error } = await supabase().from("assignments").select("*").eq("id", id).maybeSingle();
-  fail(error);
-  return data ? toAssignment(data) : null;
+  const snap = await getDoc(doc(db(), "assignments", id));
+  return snap.exists() ? toAssignment(snap.id, snap.data()) : null;
 }
 
 export async function createAssignment(
@@ -51,15 +68,18 @@ export async function createAssignment(
   userId: string,
   v: { title: string; description: string; dueAt: string | null },
 ) {
-  const { error } = await supabase()
-    .from("assignments")
-    .insert({ org_id: orgId, created_by: userId, title: v.title.trim(), description: v.description.trim(), due_at: v.dueAt });
-  fail(error);
+  await addDoc(collection(db(), "assignments"), {
+    orgId,
+    createdBy: userId,
+    title: v.title.trim(),
+    description: v.description.trim(),
+    dueAt: v.dueAt ? Timestamp.fromMillis(Date.parse(v.dueAt)) : null,
+    createdAt: serverTimestamp(),
+  });
 }
 
 export async function deleteAssignment(id: string) {
-  const { error } = await supabase().from("assignments").delete().eq("id", id);
-  fail(error);
+  await deleteDoc(doc(db(), "assignments", id));
 }
 
 /* ---------- Submissions ---------- */
@@ -71,19 +91,23 @@ export interface Submission {
   submittedAt: string;
 }
 
-const toSubmission = (r: Record<string, unknown>): Submission => ({
-  assignmentId: r.assignment_id as string,
-  userId: r.user_id as string,
-  sessionId: (r.session_id as string | null) ?? null,
-  submittedAt: r.submitted_at as string,
-});
+const submissionId = (assignmentId: string, userId: string) => `${assignmentId}_${userId}`;
+
+function toSubmission(r: Record<string, unknown>): Submission {
+  return {
+    assignmentId: r.assignmentId as string,
+    userId: r.userId as string,
+    sessionId: (r.sessionId as string | null) ?? null,
+    submittedAt: toIso(r.submittedAt) ?? new Date().toISOString(),
+  };
+}
 
 /** Submissions for the given assignments. Students only ever get their own back; staff get the whole class. */
 export async function listSubmissions(assignmentIds: string[]): Promise<Submission[]> {
-  if (!assignmentIds.length) return [];
-  const { data, error } = await supabase().from("submissions").select("*").in("assignment_id", assignmentIds);
-  fail(error);
-  return (data ?? []).map(toSubmission);
+  return chunkedIn(assignmentIds, async (chunk) => {
+    const snap = await getDocs(query(collection(db(), "submissions"), where("assignmentId", "in", chunk)));
+    return snap.docs.map((d) => toSubmission(d.data()));
+  });
 }
 
 export interface SessionSummary {
@@ -97,45 +121,43 @@ export interface SessionSummary {
 
 /** The signed-in user's finished sessions, newest first. */
 export async function myFinishedSessions(userId: string): Promise<SessionSummary[]> {
-  const { data, error } = await supabase()
-    .from("sessions")
-    .select("id, topic, committee, ai_countries, updated_at, report")
-    .eq("user_id", userId)
-    .eq("phase", "ended")
-    .order("updated_at", { ascending: false })
-    .limit(50);
-  fail(error);
-  return (data ?? []).map((r) => ({
-    id: r.id as string,
-    topic: r.topic as string,
-    committee: r.committee as string,
-    aiCountries: (r.ai_countries as string[]) ?? [],
-    updatedAt: r.updated_at as string,
-    hasReport: r.report !== null,
-  }));
+  const snap = await getDocs(
+    query(collection(db(), "sessions"), where("userId", "==", userId), where("phase", "==", "ended")),
+  );
+  return snap.docs
+    .map((d) => {
+      const r = d.data();
+      return {
+        id: d.id,
+        topic: r.topic as string,
+        committee: r.committee as string,
+        aiCountries: (r.aiCountries as string[]) ?? [],
+        updatedAt: toIso(r.updatedAt) ?? new Date().toISOString(),
+        hasReport: r.report != null,
+      };
+    })
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+    .slice(0, 50);
 }
 
 /** Hands in a session. It is shared with the organization's teachers by attaching it to the organization. */
 export async function submitSession(a: Assignment, userId: string, sessionId: string) {
-  const sb = supabase();
-  const shared = await sb.from("sessions").update({ org_id: a.orgId }).eq("id", sessionId).eq("user_id", userId);
-  fail(shared.error);
-  const { error } = await sb
-    .from("submissions")
-    .upsert({ assignment_id: a.id, user_id: userId, session_id: sessionId, submitted_at: new Date().toISOString() });
-  fail(error);
+  await updateDoc(doc(db(), "sessions", sessionId), { orgId: a.orgId });
+  await setDoc(doc(db(), "submissions", submissionId(a.id, userId)), {
+    assignmentId: a.id,
+    userId,
+    sessionId,
+    submittedAt: serverTimestamp(),
+  });
 }
 
 export async function withdrawSubmission(assignmentId: string, userId: string) {
-  const { error } = await supabase().from("submissions").delete().eq("assignment_id", assignmentId).eq("user_id", userId);
-  fail(error);
+  await deleteDoc(doc(db(), "submissions", submissionId(assignmentId, userId)));
 }
 
 /** Teachers reading a student's handed-in session. */
 export async function getSessionForReview(sessionId: string): Promise<Session | null> {
-  const { data, error } = await supabase().from("sessions").select("*").eq("id", sessionId).maybeSingle();
-  fail(error);
-  return data ? fromRow(data) : null;
+  return getSession(sessionId);
 }
 
 /* ---------- Reminders: what is coming up across all my organizations ---------- */
@@ -149,21 +171,24 @@ export interface Reminder {
 export async function myReminders(userId: string, orgs: Org[]): Promise<Reminder[]> {
   const studentOrgs = orgs.filter((o) => o.role === "student");
   if (!studentOrgs.length) return [];
-  const horizon = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
-  const { data, error } = await supabase()
-    .from("assignments")
-    .select("*")
-    .in("org_id", studentOrgs.map((o) => o.id))
-    .not("due_at", "is", null)
-    .lte("due_at", horizon)
-    .order("due_at", { ascending: true });
-  fail(error);
-  const assignments = (data ?? []).map(toAssignment);
-  const done = new Set((await listSubmissions(assignments.map((a) => a.id))).filter((s) => s.userId === userId).map((s) => s.assignmentId));
+  const horizon = Date.now() + 7 * 24 * 3600 * 1000;
+  const assignments = (
+    await chunkedIn(
+      studentOrgs.map((o) => o.id),
+      async (chunk) => {
+        const snap = await getDocs(query(collection(db(), "assignments"), where("orgId", "in", chunk)));
+        return snap.docs.map((d) => toAssignment(d.id, d.data()));
+      },
+    )
+  ).filter((a) => a.dueAt && Date.parse(a.dueAt) <= horizon);
+  const done = new Set(
+    (await listSubmissions(assignments.map((a) => a.id))).filter((s) => s.userId === userId).map((s) => s.assignmentId),
+  );
   const names = new Map(studentOrgs.map((o) => [o.id, o.name]));
   const now = Date.now();
   return assignments
     .filter((a) => !done.has(a.id))
+    .sort((a, b) => Date.parse(a.dueAt as string) - Date.parse(b.dueAt as string))
     .map((a) => ({ assignment: a, orgName: names.get(a.orgId) ?? "", overdue: Date.parse(a.dueAt as string) < now }));
 }
 
@@ -181,72 +206,66 @@ export interface Message {
   createdAt: string;
 }
 
-const toMessage = (r: Record<string, unknown>): Message => ({
-  id: r.id as string,
-  channelId: r.channel_id as string,
-  userId: r.user_id as string,
+const toMessage = (id: string, r: Record<string, unknown>): Message => ({
+  id,
+  channelId: r.channelId as string,
+  userId: r.userId as string,
   body: r.body as string,
-  createdAt: r.created_at as string,
+  createdAt: toIso(r.createdAt) ?? new Date().toISOString(),
 });
 
 export async function listChannels(orgId: string): Promise<Channel[]> {
-  const { data, error } = await supabase().from("channels").select("id, name").eq("org_id", orgId).order("created_at");
-  fail(error);
-  return (data ?? []) as Channel[];
+  const snap = await getDocs(query(collection(db(), "channels"), where("orgId", "==", orgId)));
+  return snap.docs
+    .map((d) => ({ id: d.id, name: d.data().name as string, createdAt: d.data().createdAt as Timestamp | undefined }))
+    .sort((a, b) => (a.createdAt?.toMillis() ?? 0) - (b.createdAt?.toMillis() ?? 0))
+    .map((c) => ({ id: c.id, name: c.name }));
 }
 
 export async function createChannel(orgId: string, name: string): Promise<Channel> {
-  const { data, error } = await supabase()
-    .from("channels")
-    .insert({ org_id: orgId, name: name.trim().toLowerCase().replace(/\s+/g, "-").slice(0, 40) })
-    .select("id, name")
-    .single();
-  fail(error);
-  return data as Channel;
+  const cleaned = name.trim().toLowerCase().replace(/\s+/g, "-").slice(0, 40);
+  const ref = await addDoc(collection(db(), "channels"), { orgId, name: cleaned, createdAt: serverTimestamp() });
+  return { id: ref.id, name: cleaned };
 }
 
 export async function listMessages(channelId: string): Promise<Message[]> {
-  const { data, error } = await supabase()
-    .from("messages")
-    .select("*")
-    .eq("channel_id", channelId)
-    .order("created_at", { ascending: false })
-    .limit(100);
-  fail(error);
-  return (data ?? []).map(toMessage).reverse();
+  const snap = await getDocs(query(collection(db(), "messages"), where("channelId", "==", channelId)));
+  return snap.docs
+    .map((d) => toMessage(d.id, d.data()))
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+    .slice(-100);
 }
 
 export async function sendMessage(channelId: string, userId: string, body: string): Promise<Message> {
-  const { data, error } = await supabase()
-    .from("messages")
-    .insert({ channel_id: channelId, user_id: userId, body: body.trim() })
-    .select("*")
-    .single();
-  fail(error);
-  return toMessage(data as Record<string, unknown>);
+  const ref = await addDoc(collection(db(), "messages"), {
+    channelId,
+    userId,
+    body: body.trim(),
+    createdAt: serverTimestamp(),
+  });
+  const snap = await getDoc(ref);
+  return toMessage(ref.id, snap.data() ?? {});
 }
 
 export async function deleteMessage(id: string) {
-  const { error } = await supabase().from("messages").delete().eq("id", id);
-  fail(error);
+  await deleteDoc(doc(db(), "messages", id));
 }
 
 /** Live updates for a channel. Returns a function that stops listening. */
 export function watchMessages(channelId: string, onInsert: (m: Message) => void, onDelete: (id: string) => void) {
-  const sb = supabase();
-  const ch = sb
-    .channel(`messages:${channelId}`)
-    .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: `channel_id=eq.${channelId}` }, (p) =>
-      onInsert(toMessage(p.new)),
-    )
-    .on("postgres_changes", { event: "DELETE", schema: "public", table: "messages" }, (p) => {
-      const id = (p.old as { id?: string }).id;
-      if (id) onDelete(id);
-    })
-    .subscribe();
-  return () => {
-    sb.removeChannel(ch);
-  };
+  const seen = new Set<string>();
+  const unsub = onSnapshot(query(collection(db(), "messages"), where("channelId", "==", channelId)), (snap) => {
+    for (const change of snap.docChanges()) {
+      if (change.type === "added" && !seen.has(change.doc.id)) {
+        seen.add(change.doc.id);
+        onInsert(toMessage(change.doc.id, change.doc.data()));
+      } else if (change.type === "removed") {
+        seen.delete(change.doc.id);
+        onDelete(change.doc.id);
+      }
+    }
+  });
+  return unsub;
 }
 
 /* ---------- Dates ---------- */

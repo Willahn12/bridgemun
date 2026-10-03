@@ -4,17 +4,27 @@ import { useState } from "react";
 import Link from "next/link";
 import { Eye, EyeSlash } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import {
+  createUserWithEmailAndPassword,
+  sendEmailVerification,
+  signInWithEmailAndPassword,
+  signOut as firebaseSignOut,
+  updateProfile,
+} from "firebase/auth";
+import { doc, serverTimestamp, setDoc } from "firebase/firestore";
+import { auth, db } from "@/lib/firebase";
 import { useAuth } from "@/lib/auth";
 import AuthShell from "@/components/AuthShell";
 
-function friendly(message: string): string {
-  const m = message.toLowerCase();
-  if (m.includes("invalid login")) return "That email and password do not match.";
-  if (m.includes("already registered")) return "An account with this email already exists. Sign in instead.";
-  if (m.includes("rate limit")) return "Too many attempts. Wait a minute and try again.";
-  if (m.includes("email not confirmed")) return "Your email is not confirmed yet. Open the link we emailed you, then sign in.";
-  return message;
+function friendly(code: string): string {
+  if (code.includes("invalid-credential") || code.includes("wrong-password") || code.includes("user-not-found")) {
+    return "That email and password do not match.";
+  }
+  if (code.includes("email-already-in-use")) return "An account with this email already exists. Sign in instead.";
+  if (code.includes("too-many-requests")) return "Too many attempts. Wait a minute and try again.";
+  if (code.includes("weak-password")) return "Choose a stronger password, at least 8 characters.";
+  if (code.includes("network-request-failed")) return "Could not reach the server. Check your connection.";
+  return code.replace("auth/", "").replace(/-/g, " ") || "Something went wrong";
 }
 
 export default function AuthForm({ mode, created }: { mode: "signin" | "signup"; created?: "1" | "confirm" }) {
@@ -25,7 +35,6 @@ export default function AuthForm({ mode, created }: { mode: "signin" | "signup";
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [resent, setResent] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
   const signup = mode === "signup";
@@ -36,36 +45,22 @@ export default function AuthForm({ mode, created }: { mode: "signin" | "signup";
     setBusy(true);
     setError(null);
     try {
-      const sb = supabase();
       if (signup) {
-        const { data, error } = await sb.auth.signUp({
-          email: email.trim(),
-          password,
-          options: { data: { full_name: name.trim() } },
-        });
-        if (error) throw error;
-        // Always send new accounts to the sign-in page. With email confirmation on there is no session yet.
-        if (data.session) await sb.auth.signOut();
-        router.push(data.session ? "/login?created=1" : "/login?created=confirm");
+        const cred = await createUserWithEmailAndPassword(auth(), email.trim(), password);
+        await updateProfile(cred.user, { displayName: name.trim() });
+        await setDoc(doc(db(), "users", cred.user.uid), { displayName: name.trim(), createdAt: serverTimestamp() });
+        sendEmailVerification(cred.user).catch(() => {});
+        await firebaseSignOut(auth());
+        router.push("/login?created=1");
         return;
       }
-      const { error } = await sb.auth.signInWithPassword({ email: email.trim(), password });
-      if (error) throw error;
+      await signInWithEmailAndPassword(auth(), email.trim(), password);
       router.push("/");
     } catch (err) {
       setError(friendly(err instanceof Error ? err.message : "Something went wrong"));
       setBusy(false);
     }
   }
-
-  async function resend() {
-    setError(null);
-    const { error } = await supabase().auth.resend({ type: "signup", email: email.trim() });
-    if (error) setError(friendly(error.message));
-    else setResent(true);
-  }
-
-  const unconfirmed = error?.startsWith("Your email is not confirmed") ?? false;
 
   if (ready && user && !busy) {
     return (
@@ -88,9 +83,7 @@ export default function AuthForm({ mode, created }: { mode: "signin" | "signup";
     >
       {created && !signup && (
         <p role="status" className="tone-card mb-6 p-3 text-sm leading-relaxed">
-          {created === "confirm"
-            ? "Your account was created. We emailed you a link: open it to confirm your email, then sign in below."
-            : "Your account was created. Sign in below."}
+          Your account was created. Sign in below.
         </p>
       )}
 
@@ -143,16 +136,6 @@ export default function AuthForm({ mode, created }: { mode: "signin" | "signup";
         {error && (
           <p role="alert" className="mt-4 text-sm text-danger">
             {error}
-          </p>
-        )}
-        {unconfirmed && (
-          <button type="button" className="mt-2 text-sm font-medium text-accent hover:underline" onClick={resend}>
-            Send the confirmation email again
-          </button>
-        )}
-        {resent && (
-          <p role="status" className="mt-2 text-sm">
-            Sent. Check your inbox and spam folder.
           </p>
         )}
 

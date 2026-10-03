@@ -1,11 +1,17 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import type { User } from "@supabase/supabase-js";
-import { supabase } from "@/lib/supabase";
+import { onAuthStateChanged, signOut as firebaseSignOut } from "firebase/auth";
+import { auth } from "@/lib/firebase";
+
+export interface AppUser {
+  id: string;
+  email: string | null;
+  name: string;
+}
 
 export interface AuthState {
-  user: User | null;
+  user: AppUser | null;
   /** False until the first check of the stored login has finished. */
   ready: boolean;
 }
@@ -20,12 +26,14 @@ function set(next: AuthState) {
   listeners.forEach((l) => l());
 }
 
+function toAppUser(u: { uid: string; email: string | null; displayName: string | null }): AppUser {
+  return { id: u.uid, email: u.email, name: u.displayName?.trim() || u.email?.split("@")[0] || "Account" };
+}
+
 function start() {
   if (started || typeof window === "undefined") return;
   started = true;
-  const sb = supabase();
-  sb.auth.getSession().then(({ data }) => set({ user: data.session?.user ?? null, ready: true }));
-  sb.auth.onAuthStateChange((_event, session) => set({ user: session?.user ?? null, ready: true }));
+  onAuthStateChanged(auth(), (u) => set({ user: u ? toAppUser(u) : null, ready: true }));
 }
 
 export function useAuth(): AuthState {
@@ -40,7 +48,7 @@ export function useAuth(): AuthState {
   );
 }
 
-export function currentUser(): User | null {
+export function currentUser(): AppUser | null {
   return state.user;
 }
 
@@ -50,11 +58,10 @@ export function subscribeAuth(cb: () => void): () => void {
   return () => listeners.delete(cb);
 }
 
-export function displayName(user: User): string {
-  const meta = user.user_metadata as { full_name?: string } | undefined;
-  return meta?.full_name?.trim() || user.email?.split("@")[0] || "Account";
+export function displayName(user: AppUser): string {
+  return user.name;
 }
 
 export async function signOut() {
-  await supabase().auth.signOut();
+  await firebaseSignOut(auth());
 }

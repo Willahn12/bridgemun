@@ -1,39 +1,62 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { confirmPasswordReset, verifyPasswordResetCode } from "firebase/auth";
 import AuthShell from "@/components/AuthShell";
-import { useAuth } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { auth } from "@/lib/firebase";
 
-/* The link in the reset email brings people here already signed in for a short while.
-   From there they can choose a new password. */
+/* The link in the reset email brings people here with a one-time code in the URL
+   (?oobCode=...). From there they can choose a new password. */
 export default function ResetPasswordPage() {
+  return (
+    <Suspense fallback={<AuthShell title="Choose a new password" text="One moment."><div className="h-48 animate-pulse rounded-[var(--radius-ui)] bg-sunk" aria-label="Loading" /></AuthShell>}>
+      <ResetPasswordForm />
+    </Suspense>
+  );
+}
+
+function ResetPasswordForm() {
   const router = useRouter();
-  const { user, ready } = useAuth();
+  const searchParams = useSearchParams();
+  const oobCode = searchParams.get("oobCode");
+  const [checking, setChecking] = useState(true);
+  const [validCode, setValidCode] = useState(false);
   const [password, setPassword] = useState("");
   const [again, setAgain] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!oobCode) {
+      setChecking(false);
+      return;
+    }
+    verifyPasswordResetCode(auth(), oobCode)
+      .then(() => setValidCode(true))
+      .catch(() => setValidCode(false))
+      .finally(() => setChecking(false));
+  }, [oobCode]);
 
   const mismatch = again !== "" && password !== again;
   const valid = password.length >= 8 && password === again;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (!oobCode) return;
     setBusy(true);
     setError(null);
-    const { error } = await supabase().auth.updateUser({ password });
-    if (error) {
-      setError(error.message);
+    try {
+      await confirmPasswordReset(auth(), oobCode, password);
+      router.push("/login?created=1");
+    } catch (err) {
+      setError(err instanceof Error ? err.message.replace("auth/", "").replace(/-/g, " ") : "Something went wrong");
       setBusy(false);
-      return;
     }
-    router.push("/");
   }
 
-  if (!ready) {
+  if (checking) {
     return (
       <AuthShell title="Choose a new password" text="One moment.">
         <div className="h-48 animate-pulse rounded-[var(--radius-ui)] bg-sunk" aria-label="Loading" />
@@ -41,7 +64,7 @@ export default function ResetPasswordPage() {
     );
   }
 
-  if (!user) {
+  if (!oobCode || !validCode) {
     return (
       <AuthShell title="This link has expired" text="Reset links only work once, and only for a short time.">
         <Link href="/forgot-password" className="btn btn-primary">

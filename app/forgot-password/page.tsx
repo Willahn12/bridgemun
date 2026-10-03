@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { sendPasswordResetEmail } from "firebase/auth";
 import AuthShell from "@/components/AuthShell";
-import { supabase } from "@/lib/supabase";
+import { auth } from "@/lib/firebase";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
@@ -15,15 +16,22 @@ export default function ForgotPasswordPage() {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    const { error } = await supabase().auth.resetPasswordForEmail(email.trim(), {
-      redirectTo: `${window.location.origin}/reset-password`,
-    });
-    setBusy(false);
-    if (error) {
-      setError(error.message.toLowerCase().includes("rate limit") ? "Too many attempts. Wait a minute and try again." : error.message);
-    } else {
+    try {
+      await sendPasswordResetEmail(auth(), email.trim(), {
+        url: `${window.location.origin}/reset-password`,
+        handleCodeInApp: true,
+      });
       setSent(true);
+    } catch (err) {
+      const code = err instanceof Error ? err.message : "";
+      // Firebase refuses to confirm whether the address exists, so most failures still show the "check your email" state.
+      if (code.includes("too-many-requests")) {
+        setError("Too many attempts. Wait a minute and try again.");
+      } else {
+        setSent(true);
+      }
     }
+    setBusy(false);
   }
 
   return (

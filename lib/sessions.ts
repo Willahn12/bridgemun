@@ -1,8 +1,9 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import { doc, deleteDoc, getDoc, getDocs, collection, query, where, Timestamp, writeBatch } from "firebase/firestore";
 import { currentUser, subscribeAuth } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { db } from "@/lib/firebase";
 
 export type Mode = "solo" | "committee" | "table";
 
@@ -64,6 +65,8 @@ export interface Session {
   cursor?: number;
   /** Where it came from. Online rooms keep a copy of the session in each member's account. */
   source?: "practice" | "room";
+  /** Set once a session is shared with an organization (handed in as an assignment). */
+  orgId?: string;
 }
 
 export const MODE_LABEL: Record<Mode, string> = {
@@ -80,7 +83,7 @@ export function sessionTitle(s: Session): string {
   return `${who}: ${s.topic}`;
 }
 
-/* ---------- Saved sessions, stored in the signed-in user's Supabase account ----------
+/* ---------- Saved sessions, stored in the signed-in user's Firestore account ----------
    Guests cannot save. Everything below is a no-op until someone is signed in. */
 
 const EMPTY: Session[] = [];
@@ -93,26 +96,28 @@ const pending = new Map<string, Session>();
 let timer: ReturnType<typeof setTimeout> | null = null;
 
 const emit = () => listeners.forEach((l) => l());
+const toMillis = (t: unknown) => (t instanceof Timestamp ? t.toMillis() : Date.now());
 
-function toRow(s: Session, userId: string, withSource = true) {
+function toDoc(s: Session, userId: string) {
   return {
-    ...(withSource ? { source: s.source ?? "practice" } : {}),
+    source: s.source ?? "practice",
     id: s.id,
-    user_id: userId,
+    userId,
+    orgId: s.orgId ?? null,
     mode: s.mode,
     committee: s.committee,
     topic: s.topic,
-    human_country: s.humanCountry,
-    ai_countries: s.aiCountries,
+    humanCountry: s.humanCountry,
+    aiCountries: s.aiCountries,
     judge: s.judge ?? true,
-    speaking_order: s.order ?? [],
+    speakingOrder: s.order ?? [],
     cursor: s.cursor ?? 0,
     phase: s.phase ?? "debate",
     lines: s.lines,
     report: s.report ?? null,
-    started_at: new Date(s.startedAt ?? Date.now()).toISOString(),
-    ended_at: s.endedAt ? new Date(s.endedAt).toISOString() : null,
-    updated_at: new Date().toISOString(),
+    startedAt: Timestamp.fromMillis(s.startedAt ?? Date.now()),
+    endedAt: s.endedAt ? Timestamp.fromMillis(s.endedAt) : null,
+    updatedAt: Timestamp.now(),
   };
 }
 
@@ -122,19 +127,25 @@ export function fromRow(r: Record<string, unknown>): Session {
     mode: r.mode as Mode,
     committee: r.committee as string,
     topic: r.topic as string,
-    humanCountry: (r.human_country as string) ?? "",
-    aiCountries: (r.ai_countries as string[]) ?? [],
+    humanCountry: (r.humanCountry as string) ?? "",
+    aiCountries: (r.aiCountries as string[]) ?? [],
     judge: r.judge as boolean,
-    order: (r.speaking_order as string[]) ?? [],
+    order: (r.speakingOrder as string[]) ?? [],
     cursor: (r.cursor as number) ?? 0,
     phase: r.phase as Phase,
     lines: (r.lines as Line[]) ?? [],
     report: (r.report as Report | null) ?? undefined,
     source: r.source === "room" ? "room" : "practice",
-    startedAt: r.started_at ? Date.parse(r.started_at as string) : undefined,
-    endedAt: r.ended_at ? Date.parse(r.ended_at as string) : undefined,
-    updatedAt: Date.parse(r.updated_at as string),
+    orgId: (r.orgId as string | null) ?? undefined,
+    startedAt: r.startedAt ? toMillis(r.startedAt) : undefined,
+    endedAt: r.endedAt ? toMillis(r.endedAt) : undefined,
+    updatedAt: toMillis(r.updatedAt),
   };
+}
+
+export async function getSession(id: string): Promise<Session | null> {
+  const snap = await getDoc(doc(db(), "sessions", id));
+  return snap.exists() ? fromRow({ id: snap.id, ...snap.data() }) : null;
 }
 
 async function refresh() {
@@ -144,16 +155,15 @@ async function refresh() {
     emit();
     return;
   }
-  const { data, error } = await supabase()
-    .from("sessions")
-    .select("*")
-    .order("updated_at", { ascending: false })
-    .limit(100);
-  if (error) {
-    saveError = "Could not load your saved sessions.";
-  } else {
+  try {
+    const snap = await getDocs(query(collection(db(), "sessions"), where("userId", "==", user.id)));
     saveError = null;
-    sessions = data.map(fromRow);
+    sessions = snap.docs
+      .map((d) => fromRow({ id: d.id, ...d.data() }))
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, 100);
+  } catch {
+    saveError = "Could not load your saved sessions.";
   }
   emit();
 }
@@ -179,12 +189,14 @@ export async function flushSaves() {
   if (!user || pending.size === 0) return;
   const batch = [...pending.values()];
   pending.clear();
-  let { error } = await supabase().from("sessions").upsert(batch.map((s) => toRow(s, user.id)));
-  // Until migration 004 is run there is no "source" column, so save without it rather than fail.
-  if (error && error.message.includes("source")) {
-    ({ error } = await supabase().from("sessions").upsert(batch.map((s) => toRow(s, user.id, false))));
+  try {
+    const b = writeBatch(db());
+    for (const s of batch) b.set(doc(db(), "sessions", s.id), toDoc(s, user.id), { merge: true });
+    await b.commit();
+    saveError = null;
+  } catch {
+    saveError = "Your last changes could not be saved. Check your connection.";
   }
-  saveError = error ? "Your last changes could not be saved. Check your connection." : null;
   emit();
 }
 
@@ -202,8 +214,9 @@ export async function deleteSession(id: string) {
   sessions = sessions.filter((x) => x.id !== id);
   pending.delete(id);
   emit();
-  const { error } = await supabase().from("sessions").delete().eq("id", id);
-  if (error) {
+  try {
+    await deleteDoc(doc(db(), "sessions", id));
+  } catch {
     saveError = "That session could not be deleted.";
     emit();
   }
