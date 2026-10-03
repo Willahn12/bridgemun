@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Ear, Microphone, Play, SpeakerHigh, Stop } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
-import { currentUser } from "@/lib/auth";
+import { currentUser, useAuth } from "@/lib/auth";
 import { useDictation, useSpeaker } from "@/lib/voice";
 import ReportView from "@/components/delegate/ReportView";
 import { usePinHeader } from "@/components/SiteHeader";
@@ -43,6 +43,7 @@ export default function SessionView({
   onExit: () => void;
 }) {
   const router = useRouter();
+  const { user: authUser } = useAuth();
   const { mode, aiCountries } = initial;
   const judge = initial.judge ?? mode !== "table";
   const structured = mode !== "table";
@@ -481,7 +482,7 @@ export default function SessionView({
               <Stop aria-hidden="true" size={16} weight="fill" /> Silence
             </button>
           )}
-          {!ended && started && (structured ? humanSpeeches > 0 : true) && (
+          {!ended && started && (
             <button
               type="button"
               className="btn"
@@ -500,7 +501,7 @@ export default function SessionView({
             onClick={() => {
               silence();
               dictation.stop();
-              if (!ended && started && currentUser()) {
+              if (!ended && started && authUser) {
                 saveSession({ ...initial, lines: linesRef.current, phase, report, endedAt, cursor });
                 flushSaves().finally(onExit);
               } else {
@@ -508,7 +509,7 @@ export default function SessionView({
               }
             }}
           >
-            {ended ? "Close" : started && currentUser() ? "Save and leave" : "Leave session"}
+            {ended ? "Close" : started && authUser ? "Save and leave" : "Leave session"}
           </button>
         </div>
       </div>
