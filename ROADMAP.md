@@ -66,3 +66,13 @@ any signed-in user can read a room's basic state because its code is the actual 
   returns a single markdown brief (country's position, red lines, allies, fact-check pointers).
   Scope out what "better" means: more structured/sourced output, follow-up questions, citations,
   per-topic depth, tying into the country dataset item above, etc.
+- Shared/collaborative research: a research page that more than one person (people you add) can
+  add to and keep building on together, instead of one person's private briefing. Depends on
+  research briefings being saved first (see above) and probably reuses the organizations/roles
+  model, or a simpler per-document invite list.
+- Friends chat, separate from organization/classroom chat: message people you've friended on the
+  site directly. Needs a friends/contacts concept (not just shared orgs). In a DM you can send:
+  a plain text message, a summary of one of your practice chats, a saved research briefing, and
+  your AI delegate session score/report. Each of those is a different payload type in the same
+  thread, so the message model needs to support more than plain text (e.g. a `kind` field with
+  a reference to the shared session/research doc, rendered as a card in the thread).
