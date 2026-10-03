@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import ModePicker from "@/components/delegate/ModePicker";
 import PageHero from "@/components/PageHero";
@@ -9,7 +9,7 @@ import SaveChoice from "@/components/delegate/SaveChoice";
 import SessionView from "@/components/delegate/SessionView";
 import SetupForm, { type SetupResult } from "@/components/delegate/SetupForm";
 import Sidebar from "@/components/delegate/Sidebar";
-import { HUMAN, newSessionId, type Mode, type Session } from "@/lib/sessions";
+import { HUMAN, getSession, newSessionId, useSavedSessions, type Mode, type Session } from "@/lib/sessions";
 
 type View =
   | { step: "mode" }
@@ -19,9 +19,37 @@ type View =
 
 function Delegate() {
   const router = useRouter();
-  const country = useSearchParams().get("country")?.slice(0, 100) ?? "";
+  const searchParams = useSearchParams();
+  const country = searchParams.get("country")?.slice(0, 100) ?? "";
+  const openId = searchParams.get("open");
   const [view, setView] = useState<View>({ step: "mode" });
   const activeId = view.step === "session" ? view.session.id : null;
+  const saved = useSavedSessions();
+
+  // A link from Past chats (?open=<id>) resumes that session here, finished or not.
+  const [openAttempted, setOpenAttempted] = useState(false);
+  useEffect(() => {
+    if (!openId || openAttempted) return;
+    const cached = saved.find((s) => s.id === openId);
+    if (cached) {
+      setOpenAttempted(true);
+      setView({ step: "session", session: cached, save: true });
+      router.replace("/delegate");
+      return;
+    }
+    let cancelled = false;
+    getSession(openId).then((s) => {
+      if (cancelled) return;
+      setOpenAttempted(true);
+      if (s) {
+        setView({ step: "session", session: s, save: true });
+        router.replace("/delegate");
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [openId, openAttempted, saved, router]);
 
   function shuffle<T>(items: T[]): T[] {
     const a = [...items];
@@ -62,8 +90,7 @@ function Delegate() {
       <Sidebar
         activeId={activeId}
         onNew={() => setView({ step: "mode" })}
-        // A finished session opens as its report page, with the transcript and coaching beneath it.
-        onOpen={(s) => (s.report ? router.push(`/report/${s.id}`) : setView({ step: "session", session: s, save: true }))}
+        onOpen={(s) => setView({ step: "session", session: s, save: true })}
       />
 
       <section className="min-w-0">

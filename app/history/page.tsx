@@ -105,7 +105,7 @@ export default function HistoryPage() {
               return (
                 <li key={s.id} className="group relative">
                   <Link
-                    href={s.report ? `/report/${s.id}` : "/delegate"}
+                    href={s.source === "room" ? `/report/${s.id}` : `/delegate?open=${s.id}`}
                     className="tone-card flex items-center gap-4 p-4 pr-12 transition-transform duration-200 hover:-translate-y-1"
                   >
                     <span

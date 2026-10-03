@@ -500,10 +500,15 @@ export default function SessionView({
             onClick={() => {
               silence();
               dictation.stop();
-              onExit();
+              if (!ended && started && currentUser()) {
+                saveSession({ ...initial, lines: linesRef.current, phase, report, endedAt, cursor });
+                flushSaves().finally(onExit);
+              } else {
+                onExit();
+              }
             }}
           >
-            {ended ? "Close" : "Leave session"}
+            {ended ? "Close" : started && currentUser() ? "Save and leave" : "Leave session"}
           </button>
         </div>
       </div>
