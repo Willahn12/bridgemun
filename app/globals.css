@@ -1,26 +1,333 @@
 @import "tailwindcss";
 
+/* One palette, one accent (azure), one radius (8px). Both themes defined up front. */
+/* Light is always the default. Dark only applies when someone chooses it with the toggle. */
+/* Sky, water and a bridge. White and light blue as the base, one blue accent, a little sun.
+   The 17 SDG colours appear only on the bridge in the home page hero. Both themes defined up front. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
+  --background: #fbfdff;
+  --surface: #ffffff;
+  --surface-sunk: #eaf5ff;
+  --ink: #0c2b4b;
+  --muted: #4c6580;
+  --line: #d3e6f8;
+  --accent: #0a74e0;
+  --accent-ink: #ffffff;
+  --danger: #b4321f;
+  --sky-glow: #d6ecff;
+  --sky: #bfe3ff;
+  --sun: #ffc60a;
+  --cyan: #22c3f2;
+  --coral: #ff6b57;
+  --mint: #3dd6a0;
+  --violet: #9b8cff;
+  --shadow: 0 1px 2px rgb(11 107 194 / 0.05), 0 10px 28px -16px rgb(11 107 194 / 0.25);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #071624;
+  --surface: #0d2236;
+  --surface-sunk: #0a1b2b;
+  --ink: #e6f1fb;
+  --muted: #93aec7;
+  --line: #1b3650;
+  --accent: #5db4f5;
+  --accent-ink: #05121f;
+  --danger: #f08a78;
+  --sky-glow: #0f3556;
+  --sky: #134468;
+  --sun: #f2dc8a;
+  --cyan: #22c3f2;
+  --coral: #ff8a78;
+  --mint: #3dd6a0;
+  --violet: #9b8cff;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 28px -14px rgb(0 0 0 / 0.6);
 }
 
 @theme inline {
   --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  --color-surface: var(--surface);
+  --color-sunk: var(--surface-sunk);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-danger: var(--danger);
+  --font-sans: var(--font-body);
+  --font-display: var(--font-bric);
   --font-mono: var(--font-geist-mono);
+  --radius-ui: 12px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+h1, h2, h3 { text-wrap: balance; font-family: var(--font-bric), var(--font-body), system-ui, sans-serif; letter-spacing: -0.02em; }
+button, a, summary, select, [role="button"] { touch-action: manipulation; }
+
+/* One visible focus ring for every interactive control. */
+:where(a, button, input, select, textarea, summary):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: radial-gradient(72rem 26rem at 80% -7rem, var(--sky-glow), transparent 72%) no-repeat, var(--background);
+  color: var(--ink);
+  font-family: var(--font-body), system-ui, sans-serif;
 }
+
+/* Cards you can act on rise a little under the pointer. */
+.lift {
+  box-shadow: var(--shadow);
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 200ms, border-color 200ms;
+}
+.lift:hover { transform: translateY(-3px); border-color: var(--accent); }
+.lift:active { transform: translateY(0); }
+
+@layer components {
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    white-space: nowrap;
+    border-radius: 999px;
+    padding: 0.6rem 1.15rem;
+    font-size: 0.925rem;
+    font-weight: 600;
+    line-height: 1.25;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    transition: transform 150ms cubic-bezier(0.16, 1, 0.3, 1), background-color 150ms, border-color 150ms;
+    cursor: pointer;
+  }
+  .btn:hover:not(:disabled) { border-color: var(--muted); }
+  .btn:active:not(:disabled) { transform: translateY(2px); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-ink);
+    box-shadow: 0 3px 0 color-mix(in srgb, var(--accent) 55%, black);
+  }
+  .btn-primary:hover:not(:disabled) { border-color: var(--accent); filter: brightness(1.08); }
+  .btn-primary:active:not(:disabled) { box-shadow: 0 1px 0 color-mix(in srgb, var(--accent) 55%, black); }
+  .btn-live {
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+  .field {
+    width: 100%;
+    border-radius: var(--radius-ui);
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    padding: 0.65rem 0.8rem;
+    font-size: 0.975rem;
+    line-height: 1.5;
+  }
+  .field::placeholder { color: var(--muted); }
+  .field:focus-visible,
+  .btn:focus-visible,
+  a:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .label {
+    display: block;
+    margin-bottom: 0.4rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--ink);
+  }
+  .helper { font-size: 0.8rem; color: var(--muted); margin-top: 0.35rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse { animation: none; }
+}
+
+/* Full animations run when the visitor has not asked for reduced motion, or has chosen to play them anyway
+   (the inline script in the layout sets data-motion="full"). Otherwise everything appears with plain fades. */
+html[data-motion="full"] .rise { animation: rise 600ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+html[data-motion="full"] .rise-2 { animation-delay: 90ms; }
+html[data-motion="full"] .rise-3 { animation-delay: 180ms; }
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+/* The placards are dealt onto the table when the scene arrives. */
+html[data-motion="full"]:not([data-intro]) .slide[data-state="active"] .deal { animation: deal 720ms cubic-bezier(0.34, 1.35, 0.5, 1) backwards; animation-delay: var(--delay, 0ms); }
+@keyframes deal {
+  from { opacity: 0; transform: translate(0, 70px) rotate(0deg); }
+}
+/* A card flips over when the country changes. */
+html[data-motion="full"] .flip { transform-origin: 50% 0; animation: flip 460ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes flip {
+  from { opacity: 0.2; transform: perspective(700px) rotateX(-75deg); }
+}
+html[data-motion="full"] .pulse-ring { animation: pulse-ring 1.4s ease-out infinite; }
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 45%, transparent); }
+  100% { box-shadow: 0 0 0 10px transparent; }
+}
+
+/* While the intro plays: no scrolling, no header logo (it lands there at the end), page animations wait. */
+html[data-intro] { overflow: hidden; }
+html[data-intro] [data-header-logo] { visibility: hidden; }
+html[data-intro] .rise { animation-play-state: paused; }
+
+.intro { display: none; }
+html[data-intro] .intro { position: fixed; inset: 0; z-index: 60; display: block; }
+.intro-bg {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(60rem 40rem at 50% 45%, #ffffff, var(--sky) 90%);
+  transition: opacity 700ms ease 150ms;
+}
+.intro[data-flying="true"] .intro-bg { opacity: 0; }
+.intro-blob { position: absolute; aspect-ratio: 1; border-radius: 9999px; opacity: 0.85; }
+.intro-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+  padding: 0 1rem;
+  text-align: center;
+}
+.intro-logo { transform-origin: 0 0; transition: transform 900ms cubic-bezier(0.7, 0, 0.2, 1); }
+.intro-motto { min-height: 2.5rem; color: var(--ink); transition: opacity 300ms; }
+.intro[data-flying="true"] .intro-motto { opacity: 0; }
+.intro-caret {
+  display: inline-block;
+  width: 3px;
+  height: 1em;
+  margin-left: 3px;
+  vertical-align: -0.12em;
+  background: var(--accent);
+}
+html[data-motion="full"] .intro-pop { animation: intro-pop 700ms cubic-bezier(0.34, 1.56, 0.5, 1) both; }
+@keyframes intro-pop { from { opacity: 0; transform: scale(0.5) translateY(30px); } }
+html[data-motion="full"] .intro-blob { animation: intro-float 3.4s ease-in-out infinite alternate; }
+@keyframes intro-float { to { transform: translateY(-16px) scale(1.06); } }
+.intro-caret { animation: caret 0.9s steps(1) infinite; }
+@keyframes caret { 50% { opacity: 0; } }
+/* Without full motion the logo fades away instead of flying to the header. */
+html:not([data-motion="full"]) .intro-logo { transition: opacity 400ms; }
+html:not([data-motion="full"]) .intro[data-flying="true"] .intro-logo { opacity: 0; }
+
+/* Chat screens fill the window and scroll inside their own box, so the footer is not needed there. */
+html[data-pin-header] footer {
+  display: none;
+}
+
+/* A folded country card, like the ones delegates raise in committee. */
+.placard {
+  border: 3px solid var(--ink);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: 8px 8px 0 var(--cyan);
+  overflow: hidden;
+  transform: translate(var(--x, 0), var(--y, 0)) rotate(var(--rot, 0deg));
+  transition: transform 320ms cubic-bezier(0.34, 1.35, 0.5, 1);
+}
+.stage:hover .placard-a { --rot: -9deg; --x: -22px; }
+.stage:hover .placard-b { --rot: 8deg; --x: 22px; }
+
+/* Chat-style blurbs: a speech bubble with one square corner where the speaker stands. */
+.bubble-left { border-radius: 24px 24px 24px 6px; }
+.bubble-right { border-radius: 24px 24px 6px 24px; }
+
+/* ---------- The home page deck: full-screen scenes that swap instead of scrolling ---------- */
+html[data-deck] { overflow: hidden; overscroll-behavior: none; }
+
+.deck { position: fixed; inset: 4rem 0 0 0; overflow: hidden; }
+.slide {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 600ms ease, transform 900ms cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s linear 900ms;
+}
+.slide[data-state="before"] { transform: translateY(-7vh); }
+.slide[data-state="after"] { transform: translateY(7vh); }
+.slide[data-state="active"] { opacity: 1; visibility: visible; transform: none; transition-delay: 0s; }
+
+/* Things inside a scene arrive one after another. */
+.slide [data-anim] {
+  opacity: 0;
+  transform: translateY(34px) scale(0.98);
+  transition: opacity 700ms ease, transform 900ms var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)), filter 700ms ease;
+}
+.slide[data-state="active"] [data-anim] {
+  filter: none;
+  opacity: 1;
+  transform: none;
+  transition-delay: calc(var(--i, 0) * 120ms + 250ms);
+}
+/* Leaving: things slide away in the direction of travel, one after another, and shrink a little. */
+.slide[data-state="before"] [data-anim] {
+  transform: translateY(-46px) scale(0.96);
+  transition: opacity 450ms ease, transform 600ms cubic-bezier(0.5, 0, 0.75, 0);
+  transition-delay: calc(var(--i, 0) * 60ms);
+}
+.slide[data-state="after"] [data-anim] {
+  transform: translateY(46px) scale(0.96);
+  transition: opacity 450ms ease, transform 600ms cubic-bezier(0.5, 0, 0.75, 0);
+  transition-delay: calc(var(--i, 0) * 60ms);
+}
+
+/* Each kind of thing arrives (and leaves) in its own way. */
+.slide:not([data-state="active"]) [data-anim="left"] { transform: translateX(-120px); }
+.slide:not([data-state="active"]) [data-anim="right"] { transform: translateX(120px); }
+.slide:not([data-state="active"]) [data-anim="zoom"] { transform: scale(0.5); --ease: cubic-bezier(0.34, 1.56, 0.5, 1); }
+.slide:not([data-state="active"]) [data-anim="drop"] { transform: translateY(-110px); --ease: cubic-bezier(0.34, 1.7, 0.5, 1); }
+.slide:not([data-state="active"]) [data-anim="flip"] { transform: perspective(900px) rotateX(-70deg) translateY(50px); transform-origin: 50% 100%; }
+.slide:not([data-state="active"]) [data-anim="blur"] { transform: scale(0.92); filter: blur(14px); }
+.slide[data-state="active"] [data-anim="zoom"], .slide[data-state="active"] [data-anim="drop"] { --ease: cubic-bezier(0.34, 1.56, 0.5, 1); }
+
+/* Whole scenes: some slide, some zoom. */
+.slide[data-fx="zoom"][data-state="before"] { transform: scale(1.12); }
+.slide[data-fx="zoom"][data-state="after"] { transform: scale(0.9); }
+.slide[data-fx="side"][data-state="before"] { transform: translateX(-9vw); }
+.slide[data-fx="side"][data-state="after"] { transform: translateX(9vw); }
+
+/* Round shapes pop in with a bounce and shrink away when the scene leaves. */
+.slide [data-pop] { transition: transform 650ms cubic-bezier(0.5, 0, 0.75, 0), opacity 450ms ease; }
+.slide:not([data-state="active"]) [data-pop] { transform: scale(0.15); opacity: 0; }
+.slide[data-state="active"] [data-pop] {
+  transform: none;
+  opacity: 0.8;
+  transition: transform 900ms cubic-bezier(0.34, 1.56, 0.5, 1) calc(var(--i, 0) * 110ms + 400ms), opacity 500ms ease calc(var(--i, 0) * 110ms + 400ms);
+}
+html[data-intro] .slide[data-state="active"] [data-pop] { transform: scale(0.15); opacity: 0; transition-delay: 0s; }
+
+html[data-intro] .slide[data-state="active"] [data-anim] { opacity: 0; transform: translateY(34px) scale(0.98); transition-delay: 0s; }
+
+/* Reduced motion: scenes and their contents only fade. */
+html:not([data-motion="full"]) .slide,
+html:not([data-motion="full"]) .slide[data-state] { transform: none; transition-duration: 350ms; }
+html:not([data-motion="full"]) .slide [data-anim],
+html:not([data-motion="full"]) .slide [data-pop] { transform: none !important; filter: none !important; transition-duration: 350ms !important; transition-delay: 0s !important; }
+
+html[data-motion="full"] .nudge { animation: nudge 1.6s ease-in-out infinite; }
+@keyframes nudge { 50% { transform: translateY(8px); } }
+
+/* ---------- Page identity: each page sets --tone, and its panels pick it up ---------- */
+.tone-card {
+  border: 2px solid var(--ink);
+  border-radius: var(--radius-ui);
+  background: var(--surface);
+  box-shadow: 6px 6px 0 var(--tone, var(--cyan));
+}
+
+/* A voice meter that breathes. */
+html[data-motion="full"] .eq { animation: eq 1.1s ease-in-out infinite alternate; transform-origin: bottom; }
+@keyframes eq { from { transform: scaleY(0.55); } to { transform: scaleY(1); } }
