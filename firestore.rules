@@ -131,8 +131,10 @@ service cloud.firestore {
       allow create: if signedIn() && request.resource.data.host_id == request.auth.uid;
       allow update, delete: if signedIn() && resource.data.host_id == request.auth.uid;
 
+      // Readable by anyone signed in so people can see which seats are open before joining.
+      // Members hold only a name and a country; the room code is the real secret.
       match /members/{uid} {
-        allow read: if signedIn() && (isRoomMember(roomId) || isRoomHost(roomId) || room(roomId).visibility == 'public');
+        allow read: if signedIn();
         allow write: if signedIn() && uid == request.auth.uid;
       }
 
@@ -148,6 +150,33 @@ service cloud.firestore {
           || (request.resource.data.kind in ['ai', 'chair'] && isRoomHost(roomId))
         );
         allow delete: if signedIn() && isRoomHost(roomId);
+      }
+
+      // Recordings of a person's own voice (kept here because Storage needs the paid plan).
+      // Only the person whose turn it is can add one, and only members can play them.
+      match /clips/{id} {
+        allow read: if signedIn() && (isRoomMember(roomId) || isRoomHost(roomId));
+        allow create: if signedIn() && isRoomMember(roomId)
+          && request.resource.data.user_id == request.auth.uid
+          && room(roomId).status == 'live'
+          && room(roomId).turn_user == request.auth.uid;
+      }
+
+      // Floor votes. A delegate writes only their own ballot, for the vote that is open right now.
+      // The host also writes the AI delegations' ballots.
+      match /ballots/{bid} {
+        allow read: if signedIn();
+        allow create, update: if signedIn() && (
+          isRoomHost(roomId)
+          || (
+            isRoomMember(roomId)
+            && request.resource.data.user_id == request.auth.uid
+            && room(roomId).voting.status == 'open'
+            && request.resource.data.vote_id == room(roomId).voting.id
+            && bid == room(roomId).voting.id + '_' + request.auth.uid
+            && request.resource.data.vote in ['for', 'against', 'abstain']
+          )
+        );
       }
     }
   }

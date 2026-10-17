@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BridgeMUN video</title>
+    <!--
+      The forum page shows this file in an iframe. Zoom's Meeting SDK needs React 18 while BridgeMUN runs React 19,
+      so the SDK lives here, on its own page, with the React it expects from Zoom's CDN.
+      The forum page sends {source: "bridgemun", type: "join", ...} and this page answers with
+      {source: "bridgemun-zoom", type: "ready" | "joined" | "error" | "left"}. Same origin only.
+    -->
+    <style>
+      html, body { margin: 0; height: 100%; background: #0c1a2b; color: #fff; font: 14px system-ui, sans-serif; overflow: hidden; }
+      #status { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; text-align: center; opacity: 0.75; }
+      #zoom { position: absolute; inset: 0; }
+    </style>
+  </head>
+  <body>
+    <div id="status">Connecting to video…</div>
+    <div id="zoom"></div>
+
+    <script src="https://source.zoom.us/6.5.0/lib/vendor/react.min.js"></script>
+    <script src="https://source.zoom.us/6.5.0/lib/vendor/react-dom.min.js"></script>
+    <script src="https://source.zoom.us/6.5.0/lib/vendor/redux.min.js"></script>
+    <script src="https://source.zoom.us/6.5.0/lib/vendor/redux-thunk.min.js"></script>
+    <script src="https://source.zoom.us/6.5.0/lib/vendor/lodash.min.js"></script>
+    <script src="https://source.zoom.us/6.5.0/zoom-meeting-embedded-6.5.0.min.js"></script>
+    <script>
+      (function () {
+        var status = document.getElementById("status");
+        var root = document.getElementById("zoom");
+        var tell = function (type, message) {
+          window.parent.postMessage({ source: "bridgemun-zoom", type: type, message: message || "" }, location.origin);
+        };
+        if (typeof window.ZoomMtgEmbedded === "undefined") {
+          status.textContent = "Video could not load. Check your internet connection.";
+          tell("error", "The Zoom SDK did not load.");
+          return;
+        }
+        var client = window.ZoomMtgEmbedded.createClient();
+        var started = false;
+
+        window.addEventListener("message", function (e) {
+          if (e.origin !== location.origin || !e.data || e.data.source !== "bridgemun") return;
+          var d = e.data;
+          if (d.type === "leave") {
+            try { client.leaveMeeting(); } catch (err) {}
+            return;
+          }
+          if (d.type !== "join" || started) return;
+          started = true;
+          var width = Math.max(240, window.innerWidth);
+          var height = Math.max(180, window.innerHeight - 60);
+          client
+            .init({
+              zoomAppRoot: root,
+              language: "en-US",
+              patchJsMedia: true,
+              leaveOnPageUnload: true,
+              customize: {
+                video: { isResizable: false, popper: { disableDraggable: true }, viewSizes: { default: { width: width, height: height } } },
+              },
+            })
+            .then(function () {
+              return client.join({
+                sdkKey: d.sdkKey,
+                signature: d.signature,
+                meetingNumber: d.meetingNumber,
+                password: d.password,
+                userName: d.userName,
+              });
+            })
+            .then(function () {
+              status.style.display = "none";
+              tell("joined");
+              client.on("connection-change", function (p) {
+                if (p && p.state === "Closed") tell("left");
+              });
+            })
+            .catch(function (err) {
+              started = false;
+              var msg = (err && (err.reason || err.message)) || "Could not join the video.";
+              status.textContent = msg;
+              tell("error", msg);
+            });
+        });
+        tell("ready");
+      })();
+    </script>
+  </body>
+</html>

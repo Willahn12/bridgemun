@@ -6,6 +6,18 @@ import { useRouter } from "next/navigation";
 import { currentUser, useAuth } from "@/lib/auth";
 import { useDictation, useSpeaker } from "@/lib/voice";
 import ReportView from "@/components/delegate/ReportView";
+import MotionPanel, { type Ballot, type Draft } from "@/components/delegate/MotionPanel";
+import {
+  AI_MOTION_TYPES,
+  aiMayMove,
+  byPriority,
+  caucusSpeeches,
+  checkMotion,
+  describe,
+  newProcedure,
+  type Motion,
+  type Procedure,
+} from "@/lib/motions";
 import { usePinHeader } from "@/components/SiteHeader";
 import {
   HUMAN,
@@ -25,13 +37,22 @@ interface Speech {
   country: string;
   text: string;
 }
-type Directive = "reply" | "continue" | "opening" | "closing" | "vote" | "open" | "adjourn";
+type Directive = "reply" | "continue" | "opening" | "closing" | "vote" | "open" | "adjourn" | "suggest";
 type Round = "opening" | "closing";
 
 const JUDGE_VOICE = 5;
+/* Firestore rejects undefined fields, so the caucus key is removed rather than cleared. */
+function withoutCaucus(p: Procedure): Procedure {
+  const next = { ...p };
+  delete next.caucus;
+  return next;
+}
+/* "a moderated caucus on ...", "an unmoderated caucus of ...", for the judge's lines. */
+function aMotion(m: Motion): string {
+  const d = describe(m);
+  return `${/^[AEIOU]/.test(d) ? "an" : "a"} ${d.charAt(0).toLowerCase()}${d.slice(1)}`;
+}
 const reduceMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-/* Total human speeches (opening included) before the judge closes debate on time. */
-const DEBATE_LIMIT = 8;
 
 export default function SessionView({
   initial,
@@ -70,6 +91,28 @@ export default function SessionView({
     judge && structured && (initial.phase === "opening" || initial.phase === "closing") && initial.lines.length > 0,
   );
 
+  // The motion system: debate limit and caucus state, the motions on the floor, and the human's ballot.
+  const [procedure, setProcedureState] = useState<Procedure>(initial.procedure ?? newProcedure());
+  const procRef = useRef(procedure);
+  const setProcedure = useCallback((p: Procedure) => {
+    procRef.current = p;
+    setProcedureState(p);
+  }, []);
+  const [floorOpen, setFloorOpen] = useState(false);
+  const [floor, setFloor] = useState<Motion[]>([]);
+  const floorRef = useRef<Motion[]>([]);
+  const setFloorTo = (f: Motion[]) => {
+    floorRef.current = f;
+    setFloor(f);
+  };
+  const [voting, setVoting] = useState(false);
+  const [ballot, setBallot] = useState<Motion | null>(null);
+  const ballotRef = useRef<((b: Ballot) => void) | null>(null);
+  const [aiNote, setAiNote] = useState<string | null>(null);
+  const [unmodEnds, setUnmodEnds] = useState<number | null>(null);
+  const unmodRef = useRef<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
   const epochRef = useRef(0); // bumped whenever the flow is cancelled
   const seqRef = useRef(0); // identifies the current delivery of speeches
   const mutedRef = useRef(false);
@@ -88,8 +131,8 @@ export default function SessionView({
   }, []);
 
   useEffect(() => {
-    if (save) saveSession({ ...initial, lines, phase, report, endedAt, cursor });
-  }, [save, initial, lines, phase, report, endedAt, cursor]);
+    if (save) saveSession({ ...initial, lines, phase, report, endedAt, cursor, procedure });
+  }, [save, initial, lines, phase, report, endedAt, cursor, procedure]);
 
   useEffect(() => {
     if (phase === "ended") window.scrollTo({ top: 0, behavior: reduceMotion() ? "auto" : "smooth" });
@@ -154,7 +197,8 @@ export default function SessionView({
   );
 
   const call = useCallback(
-    async (directive: Directive, only?: string) => {
+    async (directive: Directive, only?: string, extra?: Record<string, unknown>) => {
+      const caucus = procRef.current.caucus;
       const res = await fetch("/api/delegate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -169,6 +213,9 @@ export default function SessionView({
           judge,
           order: order.map(nameOf),
           only,
+          caucus: caucus ? { topic: caucus.topic, speakingTime: caucus.speakingTime } : undefined,
+          informal: unmodRef.current !== null,
+          ...extra,
         }),
       });
       const body = await res.json();
@@ -236,6 +283,11 @@ export default function SessionView({
     speaker.stop();
     setSpeaking(null);
     setThinking(false);
+    ballotRef.current = null;
+    setBallot(null);
+    setFloorOpen(false);
+    unmodRef.current = null;
+    setUnmodEnds(null);
     setPhase("ended");
     setEndedAt(Date.now());
     chair("The session is adjourned. Your report is being prepared.");
@@ -342,12 +394,191 @@ export default function SessionView({
     }
   }
 
+  /* ---------- Motions (caucuses and extending debate) ---------- */
+  const spokenCount = (ls: Line[]) => ls.filter((l) => l.kind === "human" && !l.informal).length;
+  const ctx = () => ({ spoken: spokenCount(linesRef.current), procedure: procRef.current, floor: floorRef.current });
+
+  /* The chair opens the floor. One AI delegation may suggest a motion, if the AI rules allow it this round. */
+  async function openFloor() {
+    silence();
+    setError(null);
+    const round = procRef.current.rounds + 1;
+    setProcedure({ ...procRef.current, rounds: round });
+    setFloorTo([]);
+    setFloorOpen(true);
+    await say("The floor is now open to motions.");
+    const blocked = aiMayMove({ ...procRef.current, rounds: round });
+    setAiNote(blocked ? `No AI motion this round: ${blocked}` : null);
+    if (blocked) return;
+    const remaining = procRef.current.limit - spokenCount(linesRef.current);
+    const allowed = AI_MOTION_TYPES.filter((t) => t !== "extend" || remaining <= 3);
+    setThinking(true);
+    const epoch = epochRef.current;
+    try {
+      const body = await call("suggest", undefined, { allowed, remaining });
+      if (epochRef.current !== epoch || !body.motion) return;
+      const m: Motion = {
+        id: uid(),
+        type: body.motion.type,
+        by: body.motion.country,
+        mover: "ai",
+        seconded: false,
+        at: Date.now(),
+        ...(body.motion.type === "mod" ? { topic: body.motion.topic, minutes: body.motion.minutes, speakingTime: body.motion.speakingTime } : {}),
+        ...(body.motion.type === "unmod" ? { minutes: body.motion.minutes } : {}),
+        ...(body.motion.type === "extend" ? { extra: body.motion.extra } : {}),
+        ...(body.motion.reason ? { reason: body.motion.reason } : {}),
+      };
+      if (checkMotion(m, ctx())) return; // out of order: the chair does not entertain it
+      setFloorTo([...floorRef.current, m]);
+      setProcedure({ ...procRef.current, aiLastRound: round, aiSuggestions: procRef.current.aiSuggestions + 1 });
+      chair(`The delegate of ${m.by} suggests a motion for ${aMotion(m)}. It needs a second from a human delegate.`);
+    } catch {
+      // no suggestion this round
+    } finally {
+      setThinking(false);
+    }
+  }
+
+  function submitMotion(d: Draft): string | null {
+    const m: Motion = { ...d, id: uid(), by: humanName, mover: "human", seconded: true, at: Date.now() };
+    const err = checkMotion(m, ctx());
+    if (err) return err;
+    setFloorTo([...floorRef.current, m]);
+    chair(`${humanName} moves for ${aMotion(m)}.`);
+    return null;
+  }
+
+  function secondMotion(id: string) {
+    const m = floorRef.current.find((x) => x.id === id);
+    if (!m) return;
+    setFloorTo(floorRef.current.map((x) => (x.id === id ? { ...x, seconded: true } : x)));
+    chair(`${humanName} seconds the motion from ${m.by}.`);
+  }
+
+  function dropMotion(id: string, why: string) {
+    setFloorTo(floorRef.current.filter((x) => x.id !== id));
+    chair(why);
+  }
+
+  async function closeFloor(text: string) {
+    setFloorOpen(false);
+    setFloorTo([]);
+    setAiNote(null);
+    await say(text);
+  }
+
+  /* The human delegate's vote, given with the buttons in the motions panel. */
+  const askBallot = (m: Motion) =>
+    new Promise<Ballot>((resolve) => {
+      ballotRef.current = resolve;
+      setBallot(m);
+    });
+
+  function castBallot(b: Ballot) {
+    const resolve = ballotRef.current;
+    ballotRef.current = null;
+    setBallot(null);
+    resolve?.(b);
+  }
+
+  /* Votes on each motion in priority order. The first one that passes is carried out; the rest fall. */
+  async function voteOnMotions() {
+    const epoch = epochRef.current;
+    setVoting(true);
+    setError(null);
+    try {
+      for (const m of floorRef.current.filter((x) => !x.seconded)) {
+        chair(`The motion from ${m.by} was not seconded and falls.`);
+      }
+      const ordered = floorRef.current.filter((x) => x.seconded).sort(byPriority);
+      setFloorTo(ordered);
+      if (!ordered.length) return await closeFloor("There are no motions on the floor. Debate continues.");
+      if (ordered.length > 1) {
+        await say(`The chair will take the motions from most to least disruptive: ${ordered.map((m, i) => `${i + 1}, ${describe(m)}`).join("; ")}.`);
+      }
+      for (const m of ordered) {
+        if (epochRef.current !== epoch) return;
+        await say(`The committee will now vote on the motion from ${m.by}: ${describe(m)}.`);
+        const mine = m.mover === "human" ? "for" : await askBallot(m);
+        if (epochRef.current !== epoch) return;
+        setThinking(true);
+        const body = await call("vote", undefined, { motion: `${describe(m)} (moved by ${m.by})` });
+        setThinking(false);
+        if (epochRef.current !== epoch) return;
+        const votes = body.votes as { country: string; vote: string; reason: string }[];
+        const forCount = votes.filter((v) => v.vote === "for").length + (mine === "for" ? 1 : 0);
+        const against = votes.filter((v) => v.vote === "against").length + (mine === "against" ? 1 : 0);
+        const detail = votes.map((v) => `${v.country}: ${v.vote}${v.reason ? ` (${v.reason})` : ""}`).join(". ");
+        chair(`Vote on ${describe(m)}. ${humanName}: ${mine}. ${detail}. Result: ${forCount} for, ${against} against.`);
+        if (forCount > against) {
+          setFloorOpen(false);
+          setFloorTo([]);
+          setAiNote(null);
+          await enact(m, ordered.length > 1);
+          return;
+        }
+        await say("The motion fails.");
+      }
+      await closeFloor("No motion has passed. Debate continues.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The vote could not be held");
+    } finally {
+      setThinking(false);
+      setVoting(false);
+    }
+  }
+
+  async function enact(m: Motion, others: boolean) {
+    const rest = others ? " The remaining motions fall." : "";
+    const p = procRef.current;
+    switch (m.type) {
+      case "close": {
+        setProcedure(withoutCaucus(p));
+        await beginClosing(`The motion passes. Debate is closed.${rest} Closing statements will be heard in the same order as the opening.`);
+        return;
+      }
+      case "extend":
+        setProcedure({ ...p, limit: p.limit + (m.extra ?? 0), extensions: p.extensions + 1 });
+        await say(`The motion passes. Debate is extended by ${m.extra} speech${m.extra === 1 ? "" : "es"}.${rest}`);
+        return;
+      case "mod":
+        setProcedure({ ...p, caucus: { topic: m.topic ?? "", speakingTime: m.speakingTime ?? 60, left: caucusSpeeches(m) } });
+        await say(`The motion passes.${rest} The committee enters a moderated caucus on "${m.topic}". Each speaker has ${m.speakingTime} seconds. The floor is open.`);
+        return;
+      case "unmod": {
+        const ends = Date.now() + (m.minutes ?? 1) * 60_000;
+        unmodRef.current = ends;
+        setUnmodEnds(ends);
+        setNow(Date.now());
+        await say(`The motion passes.${rest} Formal debate is suspended for a ${m.minutes} minute unmoderated caucus. Delegates may speak informally.`);
+        return;
+      }
+    }
+  }
+
+  const endUnmod = useCallback(async () => {
+    if (unmodRef.current === null) return;
+    unmodRef.current = null;
+    setUnmodEnds(null);
+    await say("The unmoderated caucus has ended. The committee returns to formal debate.");
+  }, [say]);
+
+  useEffect(() => {
+    if (unmodEnds === null) return;
+    const t = setInterval(() => {
+      setNow(Date.now());
+      if (Date.now() >= unmodEnds) endUnmod();
+    }, 1000);
+    return () => clearInterval(t);
+  }, [unmodEnds, endUnmod]);
+
   function skipClosing() {
     setCursorTo(cursorRef.current + 1);
     runRound("closing");
   }
 
-  const humanSpeeches = lines.filter((l) => l.kind === "human").length;
+  const humanSpeeches = lines.filter((l) => l.kind === "human" && !l.informal).length;
   const myRoundTurn = judge && lines.length > 0 && order[cursor] === HUMAN;
   const canSpeak = phase === "debate" ? true : myRoundTurn;
 
@@ -357,22 +588,37 @@ export default function SessionView({
     if (dictation.listening) dictation.stop();
     silence();
     stickRef.current = true;
-    push({ id: uid(), speaker: humanName, kind: "human", text });
+    const informal = phase === "debate" && unmodRef.current !== null;
+    push({ id: uid(), speaker: humanName, kind: "human", text, ...(informal ? { informal: true } : {}) });
     setInput("");
     if (phase === "opening" || phase === "closing") {
       setCursorTo(cursorRef.current + 1);
       runRound(phase);
       return;
     }
-    const spoken = linesRef.current.filter((l) => l.kind === "human").length;
+    const spoken = spokenCount(linesRef.current);
+    const limit = procRef.current.limit;
+    const caucus = informal ? undefined : procRef.current.caucus;
     (async () => {
       const epoch = epochRef.current;
-      if (judge && spoken === DEBATE_LIMIT - 2) {
+      if (judge && caucus && text.split(/\s+/).length > caucus.speakingTime * 2.5) {
+        chair(`The delegate has exceeded the speaking time of ${caucus.speakingTime} seconds.`);
+      }
+      if (judge && !informal && spoken === limit - 2) {
         chair("Two more interventions remain before debate time expires.");
       }
       const ok = await aiTurn("reply");
       if (!ok || epochRef.current !== epoch) return;
-      if (judge && spoken >= DEBATE_LIMIT) {
+      if (caucus) {
+        const left = caucus.left - 1;
+        if (left > 0) setProcedure({ ...procRef.current, caucus: { ...caucus, left } });
+        else {
+          setProcedure(withoutCaucus(procRef.current));
+          await say("The moderated caucus has elapsed. The committee returns to general debate.");
+          if (epochRef.current !== epoch) return;
+        }
+      }
+      if (judge && !informal && spoken >= limit) {
         await beginClosing("Time for debate has expired. The chair closes the floor. Closing statements will now be heard in the same order as the opening.");
       }
     })();
@@ -436,6 +682,7 @@ export default function SessionView({
     };
   }, []);
 
+  const unmodLeft = unmodEnds === null ? 0 : Math.max(0, Math.ceil((unmodEnds - now) / 1000));
   const shownError = error ?? dictation.error ?? speaker.error;
   const ended = phase === "ended";
   usePinHeader(!ended);
@@ -464,6 +711,13 @@ export default function SessionView({
           <h1 className="text-xl font-semibold tracking-tight">{initial.topic}</h1>
           <p className="text-sm text-muted">{initial.committee}</p>
           {structured && <p className="mt-1 text-sm font-medium text-accent">{PHASE_LABEL[phase]}</p>}
+          {phase === "debate" && (unmodEnds !== null || procedure.caucus) && (
+            <p className="text-sm text-muted">
+              {unmodEnds !== null
+                ? `Unmoderated caucus, ${Math.floor(unmodLeft / 60)}:${String(unmodLeft % 60).padStart(2, "0")} left`
+                : `Caucus on "${procedure.caucus?.topic}", ${procedure.caucus?.speakingTime}s per speaker, ${procedure.caucus?.left} of your speeches left`}
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-3 print:hidden">
           {!ended && (
@@ -502,7 +756,7 @@ export default function SessionView({
               silence();
               dictation.stop();
               if (!ended && started && authUser) {
-                saveSession({ ...initial, lines: linesRef.current, phase, report, endedAt, cursor });
+                saveSession({ ...initial, lines: linesRef.current, phase, report, endedAt, cursor, procedure });
                 flushSaves().finally(onExit);
               } else {
                 onExit();
@@ -659,7 +913,27 @@ export default function SessionView({
 
       {!ended && (
         <div className="shrink-0 border-t border-line bg-background pb-2 pt-4">
-          {mode === "table" ? (
+          {floorOpen ? (
+            <div className="max-h-[50dvh] overflow-y-auto">
+              <MotionPanel
+                floor={floor}
+                ballot={ballot}
+                busy={thinking}
+                voting={voting}
+                aiNote={aiNote}
+                onSubmit={submitMotion}
+                onSecond={secondMotion}
+                onDecline={(id) => {
+                  const m = floor.find((x) => x.id === id);
+                  dropMotion(id, `${humanName} declines to second the motion from ${m?.by ?? "the AI delegation"}. It falls.`);
+                }}
+                onWithdraw={(id) => dropMotion(id, `${humanName} withdraws the motion.`)}
+                onVote={voteOnMotions}
+                onBallot={castBallot}
+                onCancel={() => closeFloor("The motions are withdrawn. Debate continues.")}
+              />
+            </div>
+          ) : mode === "table" ? (
             <div className="flex flex-wrap items-center gap-3">
               <button
                 type="button"
@@ -735,11 +1009,27 @@ export default function SessionView({
                     <button
                       type="button"
                       className="btn"
-                      disabled={thinking || humanSpeeches < 2}
+                      disabled={thinking || humanSpeeches < 2 || unmodEnds !== null}
                       title={humanSpeeches < 2 ? "Speak at least twice before moving to close debate" : undefined}
                       onClick={moveToClose}
                     >
                       Move to close debate
+                    </button>
+                  )}
+                  {phase === "debate" && judge && (
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={thinking || humanSpeeches === 0 || unmodEnds !== null}
+                      title={unmodEnds !== null ? "Motions are not taken during an unmoderated caucus" : humanSpeeches === 0 ? "Speak once before raising a motion" : undefined}
+                      onClick={openFloor}
+                    >
+                      Raise a motion
+                    </button>
+                  )}
+                  {phase === "debate" && unmodEnds !== null && (
+                    <button type="button" className="btn" disabled={thinking} onClick={endUnmod}>
+                      End caucus early
                     </button>
                   )}
                   {phase === "closing" && myRoundTurn && (

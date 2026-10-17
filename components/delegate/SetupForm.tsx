@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Plus, X } from "@phosphor-icons/react";
 import { MODE_LABEL, type Mode } from "@/lib/sessions";
+import CountryInput from "@/components/CountryInput";
 
 export interface SetupResult {
   committee: string;
@@ -65,7 +66,7 @@ export default function SetupForm({
         </div>
         <div>
           <label htmlFor="human" className="label">You represent</label>
-          <input id="human" className="field" maxLength={100} value={humanCountry} placeholder="Kenya" onChange={(e) => setHumanCountry(e.target.value)} />
+          <CountryInput id="human" value={humanCountry} placeholder="Kenya" exclude={ai} onChange={setHumanCountry} />
           <p className="helper">Optional.</p>
         </div>
 
@@ -74,13 +75,12 @@ export default function SetupForm({
           <div className="grid gap-2">
             {ai.map((c, i) => (
               <div key={i} className="flex gap-2">
-                <input
+                <CountryInput
                   aria-label={`AI delegation ${i + 1}`}
-                  className="field"
-                  maxLength={100}
                   value={c}
                   placeholder={["India", "Germany", "Brazil", "Japan", "Nigeria"][i]}
-                  onChange={(e) => setAi(ai.map((x, j) => (j === i ? e.target.value : x)))}
+                  exclude={[humanCountry, ...ai.filter((_, j) => j !== i)]}
+                  onChange={(v) => setAi(ai.map((x, j) => (j === i ? v : x)))}
                 />
                 {multi && ai.length > 2 && (
                   <button type="button" className="btn" aria-label={`Remove delegation ${i + 1}`} onClick={() => setAi(ai.filter((_, j) => j !== i))}>

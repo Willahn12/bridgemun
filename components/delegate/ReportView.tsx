@@ -57,7 +57,7 @@ export default function ReportView({
 
       <p className="mt-6 max-w-[68ch] leading-relaxed">{report.summary}</p>
 
-      <h3 className="mt-8 text-lg font-semibold tracking-tight">Scores</h3>
+      {report.scores.length > 0 && <h3 className="mt-8 text-lg font-semibold tracking-tight">Scores</h3>}
       <ul className="mt-3 divide-y divide-line">
         {report.scores.map((s) => (
           <li key={s.criterion} className="grid gap-1 py-3 sm:grid-cols-[13rem_4rem_1fr] sm:gap-4">
@@ -68,6 +68,7 @@ export default function ReportView({
         ))}
       </ul>
 
+      {report.strengths.length + report.improvements.length > 0 && (
       <div className="mt-8 grid gap-8 md:grid-cols-2">
         <div>
           <h3 className="text-lg font-semibold tracking-tight">What went well</h3>
@@ -86,6 +87,7 @@ export default function ReportView({
           </ul>
         </div>
       </div>
+      )}
 
       {report.moments.length > 0 && (
         <>

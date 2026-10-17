@@ -25,11 +25,25 @@ export async function POST(req: Request) {
     (l) => l && typeof l.speaker === "string" && typeof l.text === "string" && ["human", "ai", "chair"].includes(l.kind),
   );
   const isTable = b.mode === "table";
-  const humanSpeeches = lines.filter((l) => l.kind === "human");
+  const humanSpeeches = lines.filter((l) => l.kind === "human" && l.text !== "Yields the floor.");
+
+  // Nothing to judge: say so instead of asking the model, which would otherwise grade the AI delegations.
+  if (!humanSpeeches.length) {
+    return NextResponse.json({
+      report: {
+        summary: "No student spoke during this session, so there is nothing to score yet. Next time, give at least an opening statement and the coach can give you feedback.",
+        scores: [],
+        strengths: [],
+        improvements: [],
+        moments: [],
+        nextSteps: ["Give an opening statement when the judge calls on you.", "Try at least two speeches so there is enough to assess."],
+      },
+    });
+  }
   const who = isTable ? "the human speakers in the room, as a group (they may be labelled by country or as \"Room\"), not the AI delegation or the judge" : `the human delegate (${str(b.humanCountry, 100) || "You"})`;
 
   const system = `You write end-of-session feedback reports for students practising Model United Nations. The students are beginners, often around 12 to 15 years old.
-Evaluate ONLY ${who}, not the AI delegations. Use the transcript below.
+Evaluate ONLY ${who}, not the AI delegations. Use the transcript below. Only lines marked [STUDENT] were said by a student; never grade [AI delegation] or [Judge] lines.
 
 Be encouraging but honest. Do not inflate scores. Refer to specific things they actually said.
 If the student spoke fewer than 2 times, say there was too little to assess fully and score cautiously.
@@ -45,7 +59,8 @@ Give 2 to 4 strengths, 2 to 4 improvements, and 2 to 3 next steps.`;
 
   const context = `Committee: ${str(b.committee, 200)}\nTopic: ${str(b.topic, 200)}\nAI delegations: ${Array.isArray(b.aiCountries) ? (b.aiCountries as string[]).join(", ") : ""}\nStudent speeches: ${humanSpeeches.length}\n\nTranscript:\n${lines
     .slice(-120)
-    .map((l) => `${l.speaker}: ${l.text}`)
+    // Every line says who spoke, so the model can never mistake an AI delegation for a student.
+    .map((l) => `[${l.kind === "human" ? "STUDENT" : l.kind === "ai" ? "AI delegation" : "Judge"}] ${l.speaker}: ${l.text}`)
     .join("\n")}`;
 
   try {

@@ -4,6 +4,7 @@ import { useSyncExternalStore } from "react";
 import { doc, deleteDoc, getDoc, getDocs, collection, query, where, Timestamp, writeBatch } from "firebase/firestore";
 import { currentUser, subscribeAuth } from "@/lib/auth";
 import { db } from "@/lib/firebase";
+import type { Procedure } from "@/lib/motions";
 
 export type Mode = "solo" | "committee" | "table";
 
@@ -15,6 +16,8 @@ export interface Line {
   speaker: string;
   kind: "human" | "ai" | "chair";
   text: string;
+  /** Said during an unmoderated caucus: informal, and not counted against debate time. */
+  informal?: boolean;
 }
 
 export type Phase = "opening" | "debate" | "closing" | "ended";
@@ -63,6 +66,8 @@ export interface Session {
   judge?: boolean;
   order?: string[];
   cursor?: number;
+  /** Motion system state: debate limit, extensions, a moderated caucus in progress, AI motion counters. */
+  procedure?: Procedure;
   /** Where it came from. Online rooms keep a copy of the session in each member's account. */
   source?: "practice" | "room";
   /** Set once a session is shared with an organization (handed in as an assignment). */
@@ -113,6 +118,7 @@ function toDoc(s: Session, userId: string) {
     speakingOrder: s.order ?? [],
     cursor: s.cursor ?? 0,
     phase: s.phase ?? "debate",
+    procedure: s.procedure ?? null,
     lines: s.lines,
     report: s.report ?? null,
     startedAt: Timestamp.fromMillis(s.startedAt ?? Date.now()),
@@ -133,6 +139,7 @@ export function fromRow(r: Record<string, unknown>): Session {
     order: (r.speakingOrder as string[]) ?? [],
     cursor: (r.cursor as number) ?? 0,
     phase: r.phase as Phase,
+    procedure: (r.procedure as Procedure | null) ?? undefined,
     lines: (r.lines as Line[]) ?? [],
     report: (r.report as Report | null) ?? undefined,
     source: r.source === "room" ? "room" : "practice",

@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { complete, llmConfigured } from "@/lib/llm";
+import { AI_MOTION_TYPES, MOTION_INFO, type MotionType } from "@/lib/motions";
 
 type Mode = "solo" | "committee" | "table";
-type Directive = "reply" | "continue" | "opening" | "closing" | "vote" | "open" | "adjourn";
-const DIRECTIVES: Directive[] = ["reply", "continue", "opening", "closing", "vote", "open", "adjourn"];
+type Directive = "reply" | "continue" | "opening" | "closing" | "vote" | "open" | "adjourn" | "suggest";
+const DIRECTIVES: Directive[] = ["reply", "continue", "opening", "closing", "vote", "open", "adjourn", "suggest"];
 
 interface Body {
   mode: Mode;
@@ -16,6 +17,16 @@ interface Body {
   judge: boolean;
   order: string[];
   only?: string;
+  /** vote: the motion being voted on, in words. */
+  motion?: string;
+  /** suggest: motion types the AI may suggest right now, and how many human speeches remain. */
+  allowed?: MotionType[];
+  remaining?: number;
+  /** A moderated caucus in progress, or an unmoderated caucus (informal talk). */
+  caucus?: { topic: string; speakingTime: number };
+  informal?: boolean;
+  /** The speaker's time in seconds; speeches are written to fit it. */
+  seconds?: number;
 }
 
 const short = (v: unknown, n: number) => typeof v === "string" && v.trim().length > 0 && v.length <= n;
@@ -26,7 +37,7 @@ function parse(v: unknown): Body | null {
   const mode = b.mode;
   if (mode !== "solo" && mode !== "committee" && mode !== "table") return null;
   if (!short(b.committee, 200) || !short(b.topic, 200)) return null;
-  if (!Array.isArray(b.aiCountries) || b.aiCountries.length < 1 || b.aiCountries.length > 5) return null;
+  if (!Array.isArray(b.aiCountries) || b.aiCountries.length > 30) return null;
   if (!b.aiCountries.every((c) => short(c, 100))) return null;
   if (!Array.isArray(b.lines) || b.lines.length > 200) return null;
   const lines = b.lines.filter(
@@ -41,11 +52,23 @@ function parse(v: unknown): Body | null {
     lines,
     directive: DIRECTIVES.includes(b.directive as Directive) ? (b.directive as Directive) : "reply",
     judge: b.judge === true,
-    order: Array.isArray(b.order) ? b.order.filter((n): n is string => short(n, 100)).slice(0, 6) : [],
+    order: Array.isArray(b.order) ? b.order.filter((n): n is string => short(n, 100)).slice(0, 31) : [],
     only:
       short(b.only, 100) && (b.aiCountries as string[]).some((c) => c.toLowerCase() === (b.only as string).toLowerCase())
         ? (b.only as string)
         : undefined,
+    motion: short(b.motion, 300) ? (b.motion as string) : undefined,
+    allowed: Array.isArray(b.allowed) ? AI_MOTION_TYPES.filter((t) => (b.allowed as unknown[]).includes(t)) : [],
+    remaining: typeof b.remaining === "number" ? b.remaining : undefined,
+    caucus:
+      b.caucus && typeof b.caucus === "object" && short((b.caucus as Record<string, unknown>).topic, 120)
+        ? {
+            topic: (b.caucus as { topic: string }).topic,
+            speakingTime: Math.min(120, Math.max(30, Number((b.caucus as { speakingTime?: unknown }).speakingTime) || 60)),
+          }
+        : undefined,
+    informal: b.informal === true,
+    seconds: typeof b.seconds === "number" && b.seconds >= 15 && b.seconds <= 300 ? Math.round(b.seconds) : undefined,
   };
 }
 
@@ -53,7 +76,7 @@ function task(b: Body): string {
   const all = b.aiCountries.map((c) => `"${c}"`).join(", ");
   switch (b.directive) {
     case "open":
-      return `You are the presiding judge. Open the session. Call it to order, name the committee and the topic, say the speaking order for opening statements was drawn by lot, and read the order out: ${b.order.join(", ")}. ${b.mode === "table" ? '("Room" is the group of people at the table.)' : ""} Say each delegate has about 90 seconds. 2 to 3 short sentences, at most 40 words. Return JSON only: {"chair":"<what you say>"}`;
+      return `You are the presiding judge. Open the session. Call it to order, name the committee and the topic, say the speaking order for opening statements was drawn by lot, ${b.order.length > 8 ? `name the first three in the order (${b.order.slice(0, 3).join(", ")}) and say the full order is on screen.` : `and read the order out: ${b.order.join(", ")}.`} ${b.mode === "table" ? '("Room" is the group of people at the table.)' : ""} Say each delegate has about 90 seconds. 2 to 3 short sentences, at most 40 words. Return JSON only: {"chair":"<what you say>"}`;
     case "adjourn":
       return `You are the presiding judge. Close the session with brief remarks: thank the delegations, mention the topic and one theme that actually came up in the debate, and declare the session adjourned. 2 to 3 sentences, at most 50 words. Do not give scores and do not name a winner. Return JSON only: {"chair":"<what you say>"}`;
     case "opening":
@@ -63,7 +86,11 @@ function task(b: Body): string {
       if (b.only) return `Write ONE closing statement, from the AI delegation "${b.only}" only. 50 to 80 words. It summarises its position, credits the strongest point made by another delegation (by name), and says whether it will support or oppose a resolution on this topic.`;
       return `Write ONE closing statement from EACH AI delegation (${all}), in that order. 50 to 80 words each. Each summarises its position, credits the strongest point made by another delegation (by name), and says whether it will support or oppose a resolution on this topic.`;
     case "vote":
-      return `The chair has put a motion to close debate to a vote. Each AI delegation (${all}) votes "for", "against" or "abstain", in line with its real country's interests and how the debate has gone. Delegations that still have important points to make may vote against. Give a reason of at most 15 words. Return JSON only: {"votes":[{"country":"<delegation>","vote":"for|against|abstain","reason":"<reason>"}]}`;
+      return `The chair has put a motion to a vote: ${b.motion ?? "close debate"}. Each AI delegation (${all}) votes "for", "against" or "abstain", in line with its real country's interests and how the debate has gone. Return JSON only: {"votes":[{"country":"<delegation>","vote":"for|against|abstain","reason":"<reason of at most 15 words>"}]}`;
+    case "suggest": {
+      const types = (b.allowed ?? []).map((t) => `"${t}" (${MOTION_INFO[t].label}: ${MOTION_INFO[t].when})`).join("; ");
+      return `The chair has opened the floor to motions. Decide whether ONE AI delegation (${all}) should suggest a motion now. Suggest one only if it would genuinely help the debate; otherwise return {"motion":null}. Allowed types: ${types}. The human delegate has ${b.remaining ?? "several"} speeches left before debate closes on time; only suggest "extend" if that is 3 or fewer. Values: "mod" needs "topic" (a narrow sub-topic, at most 12 words), "minutes" (2 to 10) and "speakingTime" (30 to 120 seconds); "unmod" needs "minutes" (1 to 10); "extend" needs "extra" (1 to 4 speeches). Give a reason of at most 20 words, spoken to the human delegate. Return JSON only: {"motion":{"country":"<delegation>","type":"mod|unmod|extend","topic":"...","minutes":5,"speakingTime":60,"extra":2,"reason":"..."}} or {"motion":null}`;
+    }
     case "continue":
       if (b.only) return `Write exactly 1 speech from the AI delegation "${b.only}" only, developing its position and responding to the latest points in the room.`;
       return b.mode === "committee"
@@ -80,9 +107,9 @@ function task(b: Body): string {
 }
 
 function system(b: Body): string {
-  const wantsChair = b.judge && (b.directive === "reply" || b.directive === "continue");
+  const wantsChair = b.judge && !b.informal && (b.directive === "reply" || b.directive === "continue");
   const isJudgeOnly = b.directive === "open" || b.directive === "adjourn";
-  const shape = isJudgeOnly || b.directive === "vote"
+  const shape = isJudgeOnly || b.directive === "vote" || b.directive === "suggest"
     ? ""
     : wantsChair
       ? `\nReturn JSON only, in exactly this shape:\n{"chair":"<judge's words>","speeches":[{"country":"<one of the AI delegations, spelled exactly as listed>","text":"<the speech>"}]}\n`
@@ -96,6 +123,13 @@ The judge line ("chair"), at most 40 words, is spoken before the speeches. Alway
 Be neutral, firm and courteous. Rule on the human delegate only; the AI delegations are already in line.
 `
     : "";
+  const debating = b.directive === "reply" || b.directive === "continue";
+  const caucusRules =
+    debating && b.informal
+      ? `\nThe committee is in an UNMODERATED CAUCUS: informal lobbying, not formal speeches. Each message is 1 to 3 conversational sentences, with no "Honourable Chair". Delegations look for allies, propose working together on a draft resolution, or push back informally.\n`
+      : debating && b.caucus
+        ? `\nA MODERATED CAUCUS is in progress on the sub-topic "${b.caucus.topic}". Every speech must stay on that sub-topic and fit the ${b.caucus.speakingTime}-second speaking time (at most ${Math.round(b.caucus.speakingTime * 2.3)} words).${wantsChair ? " The judge rules the human delegate out of order if they leave the sub-topic." : ""}\n`
+        : "";
   return `You run the AI delegates${b.judge ? " and the presiding judge" : ""} in a Model United Nations session, for students who are learning.
 Committee: ${b.committee}
 Agenda topic: ${b.topic}
@@ -103,14 +137,18 @@ AI delegations you play: ${b.aiCountries.map((c) => `"${c}"`).join(", ")}
 Human delegate represents: ${b.humanCountry}
 
 ${task(b)}
-${shape}${judgeRules}
+${shape}${judgeRules}${caucusRules}
 Speech rules:
 - Formal MUN language: "Honourable Chair", "The delegation of X believes...", "yields the floor". Spoken style, no bullet points, no headings, no stage directions.
 - Each delegation defends its country's real, publicly known foreign policy. Never switch sides to be agreeable. Concede only what is genuinely reasonable, and say so diplomatically.
 - If unsure of a fact, keep the claim general. Never invent statistics, quotes or resolution numbers.
 - Never speak for the human delegate or for a delegation you do not play.
 - Lines from "Judge" are procedural announcements, not speeches.
-- Do not use em-dashes.`;
+- Do not use em-dashes.${
+    b.seconds
+      ? `\n- Each speech must fit in ${b.seconds} seconds when read aloud: at most ${Math.round(b.seconds * 2.4)} words. This limit overrides any word range above.`
+      : ""
+  }`;
 }
 
 export async function POST(req: Request) {
@@ -133,17 +171,31 @@ export async function POST(req: Request) {
       system: system(body),
       maxTokens: 1400,
       json: true,
-      messages: [{ role: "user", content: `Session so far:\n${transcript}\n\nProceed.` }],
+      messages: [
+        {
+          role: "user",
+          content: `Session so far:\n${transcript}\n\n${
+            body.directive === "adjourn"
+              ? "The session is over now. Do not call on any delegation. Give your closing remarks and adjourn."
+              : "Proceed."
+          }`,
+        },
+      ],
     });
     const parsed = JSON.parse(raw) as {
       speeches?: { country?: string; text?: string }[];
       votes?: { country?: string; vote?: string; reason?: string }[];
+      motion?: Record<string, unknown> | null;
       chair?: string;
     };
     const chair = typeof parsed.chair === "string" ? parsed.chair.trim().slice(0, 500) : "";
 
     if (body.directive === "open" || body.directive === "adjourn") {
       if (!chair) throw new Error("The judge returned nothing.");
+      // The model sometimes carries on the debate instead of closing it; never let that through.
+      if (body.directive === "adjourn" && !/adjourn/i.test(chair)) {
+        return NextResponse.json({ chair: "Thank you, delegates, for your contributions today. This session is now adjourned." });
+      }
       return NextResponse.json({ chair });
     }
 
@@ -159,13 +211,35 @@ export async function POST(req: Request) {
       return NextResponse.json({ votes });
     }
 
+    if (body.directive === "suggest") {
+      const m = parsed.motion;
+      const country = allowed.get(String(m?.country ?? "").toLowerCase());
+      const type = m?.type as MotionType;
+      if (!m || !country || !(body.allowed ?? []).includes(type)) return NextResponse.json({ motion: null });
+      const int = (v: unknown) => (typeof v === "number" ? Math.round(v) : undefined);
+      return NextResponse.json({
+        motion: {
+          country,
+          type,
+          topic: typeof m.topic === "string" ? m.topic.trim().slice(0, 120) : undefined,
+          minutes: int(m.minutes),
+          speakingTime: int(m.speakingTime),
+          extra: int(m.extra),
+          reason: typeof m.reason === "string" ? m.reason.trim().slice(0, 200) : undefined,
+        },
+      });
+    }
+
     const limit = body.only ? 1 : body.directive === "opening" || body.directive === "closing" ? 5 : 2;
     const speeches = (parsed.speeches ?? [])
       .map((s) => ({ country: allowed.get((s.country ?? "").toLowerCase()), text: (s.text ?? "").trim() }))
       .filter((s): s is { country: string; text: string } => Boolean(s.country && s.text))
       .slice(0, limit);
     if (!speeches.length) throw new Error("The model returned no usable speech.");
-    return NextResponse.json({ speeches, ...(body.judge && chair ? { chair } : {}) });
+    // Only debate replies carry the judge's words; for opening and closing statements the app has already
+    // recognized the speaker, and a second recognition from the model would repeat it.
+    const wantsChair = body.judge && !body.informal && (body.directive === "reply" || body.directive === "continue");
+    return NextResponse.json({ speeches, ...(wantsChair && chair ? { chair } : {}) });
   } catch (e) {
     const detail = e instanceof Error ? e.message : "Unknown error";
     return NextResponse.json({ error: "The delegates could not respond.", detail }, { status: 502 });

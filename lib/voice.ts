@@ -108,7 +108,8 @@ export function useRecorder() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const type = RECORD_TYPES.find((t) => MediaRecorder.isTypeSupported(t));
-      const rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+      // Speech-quality bitrate keeps a two-minute turn well under a Firestore document's 1 MB limit.
+      const rec = new MediaRecorder(stream, { ...(type ? { mimeType: type } : {}), audioBitsPerSecond: 24000 });
       const chunks: Blob[] = [];
       rec.ondataavailable = (e) => {
         if (e.data.size) chunks.push(e.data);
@@ -216,7 +217,8 @@ export function useSpeaker() {
   useEffect(() => stop, [stop]);
 
   /* Resolves when the speech has finished, or has been stopped. */
-  const speak = useCallback(async (text: string, voice = 0) => {
+  /* `rate` above 1 reads faster, to fit a speaker's time. The browser keeps the pitch natural. */
+  const speak = useCallback(async (text: string, voice = 0, rate = 1) => {
     stop();
     const run = runRef.current;
     const chunks = splitChunks(text);
@@ -243,6 +245,7 @@ export function useSpeaker() {
         setPlaying(true);
         await new Promise<void>((resolve) => {
           const audio = new Audio(got.url);
+          audio.playbackRate = Math.min(1.3, Math.max(1, rate));
           audioRef.current = audio;
           finishRef.current = resolve;
           audio.onended = () => resolve();

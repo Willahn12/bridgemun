@@ -1,5 +1,7 @@
 "use client";
 
+import CountryInput from "@/components/CountryInput";
+
 export interface SetupValues {
   country: string;
   committee: string;
@@ -26,14 +28,23 @@ export default function SetupFields({
           <label htmlFor={`setup-${f.key}`} className="label">
             {f.label}
           </label>
-          <input
-            id={`setup-${f.key}`}
-            className="field"
-            value={values[f.key]}
-            maxLength={200}
-            placeholder={f.placeholder}
-            onChange={(e) => onChange({ ...values, [f.key]: e.target.value })}
-          />
+          {f.key === "country" ? (
+            <CountryInput
+              id={`setup-${f.key}`}
+              value={values.country}
+              placeholder={f.placeholder}
+              onChange={(v) => onChange({ ...values, country: v })}
+            />
+          ) : (
+            <input
+              id={`setup-${f.key}`}
+              className="field"
+              value={values[f.key]}
+              maxLength={200}
+              placeholder={f.placeholder}
+              onChange={(e) => onChange({ ...values, [f.key]: e.target.value })}
+            />
+          )}
           <p className="helper">{f.helper}</p>
         </div>
       ))}
