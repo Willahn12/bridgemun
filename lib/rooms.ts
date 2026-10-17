@@ -135,6 +135,8 @@ export interface RoomLine {
   audioPath: string | null;
   /** For the judge's acknowledgement: the line it introduces. */
   refId: string | null;
+  /** Said live over the microphone: everyone already heard it, so it is not read out again. */
+  live: boolean;
 }
 
 /* Firestore document fields below deliberately keep the same snake_case names the app already
@@ -192,6 +194,7 @@ const toLine = (id: string, r: Record<string, unknown>): RoomLine => ({
   createdAt: toIso(r.created_at),
   audioPath: (r.audio_path as string | null) ?? null,
   refId: (r.ref_id as string | null) ?? null,
+  live: r.live === true,
 });
 
 export function friendlyRoomError(message: string): string {
@@ -205,7 +208,8 @@ export function friendlyRoomError(message: string): string {
   if (m.includes("choose a seat")) return "Choose the country you will represent.";
   if (m.includes("forum is full")) return "Every seat in this forum is taken.";
   if (m.includes("sign in")) return "Sign in first.";
-  if (m.includes("permission-denied") || m.includes("permission denied")) return "You do not have permission to do that.";
+  if (m.includes("permission-denied") || m.includes("permission denied") || m.includes("insufficient permissions"))
+    return "That is not allowed right now. It may not be your turn, or the forum's settings do not allow it.";
   if (m.includes("too long to send")) return "That recording is too long to send. Keep it under two minutes.";
   return message;
 }
@@ -445,7 +449,7 @@ export async function postLine(
   speaker: string,
   kind: RoomLine["kind"],
   text: string,
-  extra: { audioPath?: string; refId?: string } = {},
+  extra: { audioPath?: string; refId?: string; live?: boolean } = {},
 ): Promise<RoomLine> {
   const data = {
     user_id: kind === "human" ? userId : null,
@@ -455,6 +459,7 @@ export async function postLine(
     created_at: Timestamp.now(),
     ...(extra.audioPath ? { audio_path: extra.audioPath } : {}),
     ...(extra.refId ? { ref_id: extra.refId } : {}),
+    ...(extra.live ? { live: true } : {}),
   };
   const ref = await addDoc(collection(db(), "rooms", roomId, "lines"), data);
   return toLine(ref.id, data);

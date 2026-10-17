@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowUp, Check, CheckSquare, Copy, Microphone, MicrophoneSlash, Play, Robot, ShieldCheck, SignOut, SpeakerHigh, Stop, Timer, UsersThree, X } from "@phosphor-icons/react";
+import { ArrowUp, Broadcast, Check, CheckSquare, Copy, Microphone, MicrophoneSlash, Play, Robot, ShieldCheck, SignOut, SpeakerHigh, Stop, Timer, UsersThree, X } from "@phosphor-icons/react";
 import { defaultVoice, PERSON_VOICES, rememberedVoice, rememberVoice } from "@/lib/voices";
 import { toneStyle } from "@/lib/tone";
 import ZoomTile from "@/components/ZoomTile";
+import NotesPanel from "@/components/NotesPanel";
 import { createForumMeeting, zoomAvailable } from "@/lib/zoomClient";
+import { broadcast, listen, type Broadcast as LiveLink } from "@/lib/liveAudio";
 import { useAuth, displayName } from "@/lib/auth";
 import { useDictation, useRecorder, useSpeaker } from "@/lib/voice";
 import { flushSaves, saveSession, type Session } from "@/lib/sessions";
@@ -65,6 +67,9 @@ type Stage = "opening" | "debate" | "closing";
 
 const YIELD_TEXT = "Yields the floor.";
 
+/* How the room hears a person: their AI voice reading their words, a recording of their voice, or their voice live. */
+type SpeakMode = "ai" | "own" | "live";
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** The topic as the AI sees it, with the subtopic folded in. */
@@ -110,13 +115,19 @@ export default function RoomPage() {
   const [starting, setStarting] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   /* How the room hears this person: their chosen AI voice reading their words, or a recording of their own voice. */
-  const [speakMode, setSpeakMode] = useState<"ai" | "own">(() => {
+  const [speakMode, setSpeakMode] = useState<SpeakMode>(() => {
     try {
-      return localStorage.getItem("bridgemun.speakMode") === "own" ? "own" : "ai";
+      const m = localStorage.getItem("bridgemun.speakMode");
+      return m === "own" || m === "live" ? m : "ai";
     } catch {
       return "ai";
     }
   });
+  const [broadcasting, setBroadcasting] = useState(false); // I am talking live
+  const [hearing, setHearing] = useState<string | null>(null); // whose live voice is playing here
+  const liveRef = useRef<LiveLink | null>(null);
+  const [livePaused, setLivePaused] = useState(false);
+  const liveAudioRef = useRef<HTMLAudioElement>(null);
   const [clip, setClip] = useState<{ blob: Blob; url: string } | null>(null);
   const [sending, setSending] = useState(false);
   const [allBallots, setBallots] = useState<Ballot[]>([]);
@@ -150,6 +161,7 @@ export default function RoomPage() {
   const savedCopyRef = useRef(false);
   const finishingRef = useRef(false);
   const autoStartRef = useRef(false);
+  const startingRef = useRef(false);
   /* Host only, during a live forum: puts people who joined late at the end of the speaking order. */
   const lateJoinRef = useRef<(m: RoomMember[]) => void>(() => {});
   const chatRef = useRef<HTMLDivElement>(null);
@@ -204,7 +216,7 @@ export default function RoomPage() {
       /* Everyone else hears what a delegate said: their recording, or their words read aloud.
          The speaker does not need to hear themselves. */
       const readOut = (src: RoomLine) => {
-        if (!speakOnRef.current || src.userId === userIdRef.current || src.text === YIELD_TEXT) return;
+        if (!speakOnRef.current || src.userId === userIdRef.current || src.text === YIELD_TEXT || src.live) return;
         queueRef.current.push(
           src.audioPath
             ? { clip: src.audioPath, voice: 0, who: src.speaker }
@@ -318,7 +330,7 @@ export default function RoomPage() {
               lines: linesRef.current.slice(-150).map((l) => ({ speaker: l.speaker, kind: l.kind, text: l.text })),
               directive,
               judge: r.judge,
-              seconds: limitFor(r, directive === "opening" || directive === "closing" ? directive : "debate"),
+              seconds: limitFor(r, directive === "opening" || directive === "open" ? "opening" : directive === "closing" ? "closing" : "debate"),
               order: order ?? [],
               only,
             }),
@@ -615,6 +627,7 @@ export default function RoomPage() {
     const r = roomRef.current;
     if (!r) return;
     setStarting(true);
+    startingRef.current = true;
     setError(null);
     resumedRef.current = true; // the resume effect must not start the flow while the judge is still opening
     try {
@@ -643,6 +656,7 @@ export default function RoomPage() {
       setError(friendlyRoomError(e instanceof Error ? e.message : "Could not start."));
     } finally {
       setStarting(false);
+      startingRef.current = false;
     }
   }
 
@@ -759,6 +773,27 @@ export default function RoomPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- endEarly reads everything through refs
   }, [now, isHost, room?.status, room?.endsAt, ending]);
 
+  /* Everyone: plays whoever is talking live, as long as "Speak replies" is on. */
+  const isLive = room?.status === "live";
+  useEffect(() => {
+    if (!isLive || !userId) return;
+    return listen(
+      id,
+      userId,
+      (from, stream) => {
+        const el = liveAudioRef.current;
+        if (!el) return;
+        el.srcObject = stream;
+        el.play().catch(() => setError("Your browser blocked live audio. Click anywhere on the page to allow it."));
+        setHearing(from);
+      },
+      (from) => setHearing((h) => (h === from ? null : h)),
+    );
+  }, [id, isLive, userId]);
+  useEffect(() => {
+    if (liveAudioRef.current) liveAudioRef.current.muted = !speakOn;
+  }, [speakOn]);
+
   /* Whether to offer video at all. */
   useEffect(() => {
     let on = true;
@@ -810,6 +845,12 @@ export default function RoomPage() {
     const t = setInterval(async () => {
       const r = roomRef.current;
       if (!r || r.status === "ended") return;
+      /* Host only, a watchdog: if this tab's forum engine has stopped while the forum is live (the page was
+         refreshed in the background, a hot reload, a crash), start it again from the turn it was on. */
+      if (r.hostId === userId && r.status === "live" && r.phase !== "lobby" && !flowRunRef.current && !finishingRef.current && !startingRef.current) {
+        resumedRef.current = true;
+        drive(r.phase as Stage, r.cursor);
+      }
       try {
         const [fresh, l] = await Promise.all([r.hostId === userId ? Promise.resolve(null) : getRoom(id), listRoomLines(id)]);
         if (fresh) {
@@ -822,7 +863,7 @@ export default function RoomPage() {
       }
     }, 4000);
     return () => clearInterval(t);
-  }, [loaded, userId, id, receive]);
+  }, [loaded, userId, id, receive, drive]);
 
   useEffect(() => {
     const el = chatRef.current;
@@ -852,8 +893,8 @@ export default function RoomPage() {
     if (speakMode === "own") await recorder.start();
   }
 
-  function chooseMode(m: "ai" | "own") {
-    if (dictation.listening || recorder.recording) return;
+  function chooseMode(m: SpeakMode) {
+    if (dictation.listening || recorder.recording || broadcasting) return;
     setSpeakMode(m);
     clearClip();
     try {
@@ -861,6 +902,46 @@ export default function RoomPage() {
     } catch {
       // the choice still applies until the page is reloaded
     }
+  }
+
+  /* Talking live: the microphone goes to everyone in the room now, and the captions become the speech's text. */
+  async function goLive() {
+    if (!room || !userId || broadcasting) return;
+    setError(null);
+    try {
+      const listeners = membersRef.current.filter((m) => m.userId !== userId).map((m) => m.userId);
+      liveRef.current = await broadcast(room.id, userId, listeners);
+      setLivePaused(false);
+      setBroadcasting(true);
+      dictation.start();
+    } catch (e) {
+      setError(
+        e instanceof DOMException && e.name === "NotAllowedError"
+          ? "Microphone access was blocked. Allow it in your browser settings."
+          : friendlyRoomError(e instanceof Error ? e.message : "Could not go live."),
+      );
+    }
+  }
+
+  /* Pausing mutes the microphone and the captions; the connection stays open so resuming is instant. */
+  function togglePause() {
+    const live = liveRef.current;
+    if (!live) return;
+    const next = !livePaused;
+    live.setPaused(next);
+    setLivePaused(next);
+    if (next) dictation.stop();
+    else dictation.start();
+  }
+
+  async function endLive(andSend: boolean) {
+    dictation.stop();
+    const live = liveRef.current;
+    liveRef.current = null;
+    setBroadcasting(false);
+    setLivePaused(false);
+    await live?.stop().catch(() => {});
+    if (andSend) await send(input.trim() || "(Spoke live)", false, true);
   }
 
   async function chooseVoice(v: number) {
@@ -889,6 +970,7 @@ export default function RoomPage() {
     if (myTurn) return;
     dictation.stop();
     recorder.stop();
+    if (liveRef.current) endLive(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [myTurn]);
 
@@ -912,7 +994,7 @@ export default function RoomPage() {
     setMyVoice(room.id, rememberedVoice() ?? defaultVoice(userId)).catch(() => {});
   }, [needsVoice, room, userId]);
 
-  async function send(text: string, useClip = true) {
+  async function send(text: string, useClip = true, live = false) {
     const attached = useClip && speakMode === "own" ? clip : null;
     const typed = text.trim();
     const body = typed || (attached ? "(Spoken recording)" : "");
@@ -934,7 +1016,7 @@ export default function RoomPage() {
           );
         }
       }
-      const line = await postLine(room.id, userId, myLabel, "human", body, { audioPath });
+      const line = await postLine(room.id, userId, myLabel, "human", body, { audioPath, live });
       setInput("");
       clearClip();
       receive(line);
@@ -1005,6 +1087,7 @@ export default function RoomPage() {
   const speakingNow = delegations.find(isSpeaking);
   const emptySeats = room.seats ? delegations.filter((d) => !d.member) : [];
   const joined = delegations.filter((d) => d.member).length;
+  const inDebate = delegations.filter((d) => d.member || d.ai);
 
   const voting = room.voting;
   // Ballots from an earlier vote can linger for a moment after a new one opens.
@@ -1142,11 +1225,12 @@ export default function RoomPage() {
           <p className="shrink-0 text-[11px] font-bold uppercase leading-tight tracking-wider text-muted">
             Delegations
             <span className="block font-normal normal-case tracking-normal">
-              {delegations.length} · {joined} {joined === 1 ? "person" : "people"}
+              {inDebate.length} · {joined} {joined === 1 ? "person" : "people"}
             </span>
           </p>
           <ul className="flex items-start gap-3" aria-label="Delegations">
-            {delegations.map((d) => {
+            {/* Empty seats only matter to the host, who can give them to the AI; everyone else sees who is debating. */}
+            {(isHost ? delegations : inDebate).map((d) => {
               const speaking = isSpeaking(d);
               const mine = !!userId && d.member?.userId === userId;
               const empty = !d.member && !d.ai;
@@ -1212,6 +1296,11 @@ export default function RoomPage() {
                 </li>
               );
             })}
+            {!isHost && room.lateJoin && emptySeats.length > 0 && (
+              <li className="flex h-11 shrink-0 items-center self-start rounded-full border border-dashed border-line px-3 text-xs font-semibold text-muted">
+                +{emptySeats.length} open {emptySeats.length === 1 ? "seat" : "seats"}
+              </li>
+            )}
           </ul>
         </div>
       )}
@@ -1273,6 +1362,13 @@ export default function RoomPage() {
             <p className="absolute bottom-3 left-3 text-xs text-white/70">
               {speakingNow ? `${speakingNow.country} (speaking)` : "Floor"}
             </p>
+            {(hearing || broadcasting) && (
+              <p className="absolute left-3 top-3 flex items-center gap-1.5 rounded-full bg-danger px-2.5 py-0.5 text-xs font-bold uppercase tracking-wider">
+                <span className="size-1.5 animate-pulse rounded-full bg-white" aria-hidden="true" />{" "}
+                {broadcasting ? (livePaused ? "You are paused" : "You are live") : "Live voice"}
+              </p>
+            )}
+            <audio ref={liveAudioRef} autoPlay className="hidden" />
           </div>
         </div>
 
@@ -1519,6 +1615,14 @@ export default function RoomPage() {
             </ul>
           </section>
           )}
+          {me && (
+            <NotesPanel
+              roomId={room.id}
+              limitSeconds={live && room.phase !== "lobby" ? limitFor(room, room.phase) : room.limits ? room.limits.opening : null}
+              canUse={myTurn && !me.moderator}
+              onUse={(text) => setInput(text)}
+            />
+          )}
         </div>
 
         {/* ---------- Transcript and speaking ---------- */}
@@ -1575,7 +1679,8 @@ export default function RoomPage() {
                   {(
                     [
                       ["ai", "AI voice", Robot, true],
-                      ["own", "My own voice", Microphone, recorder.supported],
+                      ["own", "Record", Microphone, recorder.supported],
+                      ["live", "Talk live", Broadcast, typeof RTCPeerConnection !== "undefined"],
                     ] as const
                   ).map(([m, name, Icon, ok]) => (
                     <button
@@ -1583,7 +1688,7 @@ export default function RoomPage() {
                       type="button"
                       role="radio"
                       aria-checked={speakMode === m}
-                      disabled={!ok || dictation.listening || recorder.recording}
+                      disabled={!ok || dictation.listening || recorder.recording || broadcasting}
                       onClick={() => chooseMode(m)}
                       className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 transition-colors disabled:opacity-50 ${
                         speakMode === m ? "bg-accent text-accent-ink" : "text-muted hover:text-ink"
@@ -1649,14 +1754,44 @@ export default function RoomPage() {
                 placeholder={
                   !myTurn
                     ? "You can speak when the judge calls on you."
-                    : speakMode === "own"
+                    : speakMode === "live"
+                      ? "Press Go live and talk: everyone hears you now. Your words appear here as captions…"
+                      : speakMode === "own"
                       ? "Press Unmute and talk. Your words appear here as captions…"
                       : `Type or dictate as ${myLabel}. Your AI voice reads it out. Enter to send…`
                 }
               />
               <div className="mt-2 flex flex-wrap justify-between gap-2">
                 <div className="flex flex-wrap gap-2">
-                  {speakMode === "own" ? (
+                  {speakMode === "live" ? (
+                    broadcasting ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={togglePause}
+                          aria-pressed={livePaused}
+                          className={`btn ${livePaused ? "" : "btn-live pulse-ring"}`}
+                        >
+                          {livePaused ? (
+                            <>
+                              <Microphone aria-hidden="true" size={18} /> Resume
+                            </>
+                          ) : (
+                            <>
+                              <MicrophoneSlash aria-hidden="true" size={18} /> Pause
+                            </>
+                          )}
+                        </button>
+                        <button type="button" onClick={() => endLive(true)} className="btn btn-primary">
+                          {livePaused ? "Paused" : "Live"} · End and send
+                        </button>
+                      </>
+                    ) : (
+                      <button type="button" onClick={goLive} disabled={!myTurn} className="btn">
+                        <Broadcast aria-hidden="true" size={18} /> Go live
+                      </button>
+                    )
+                  ) : speakMode === "own" ? (
                     <button
                       type="button"
                       onClick={recorder.recording ? endSpeaking : beginSpeaking}
@@ -1690,7 +1825,7 @@ export default function RoomPage() {
                 <button
                   type="button"
                   onClick={() => send(input)}
-                  disabled={!myTurn || sending || recorder.recording || (!input.trim() && !(speakMode === "own" && clip))}
+                  disabled={!myTurn || sending || recorder.recording || broadcasting || (!input.trim() && !(speakMode === "own" && clip))}
                   className="btn btn-primary"
                 >
                   <ArrowUp aria-hidden="true" size={18} weight="bold" />

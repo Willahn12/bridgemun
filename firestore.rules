@@ -162,6 +162,20 @@ service cloud.firestore {
           && room(roomId).turn_user == request.auth.uid;
       }
 
+      // Talking live: connection details between the speaker and each listener (lib/liveAudio.ts).
+      // Only the person whose turn it is can start one; the listener only fills in the answer.
+      match /rtc/{id} {
+        allow read: if signedIn() && isRoomMember(roomId);
+        allow create: if signedIn() && isRoomMember(roomId)
+          && request.resource.data.from == request.auth.uid
+          && id == request.auth.uid + '_' + request.resource.data.to
+          && room(roomId).status == 'live'
+          && room(roomId).turn_user == request.auth.uid;
+        allow update: if signedIn() && resource.data.to == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['answer']);
+        allow delete: if signedIn() && (resource.data.from == request.auth.uid || isRoomHost(roomId));
+      }
+
       // Floor votes. A delegate writes only their own ballot, for the vote that is open right now.
       // The host also writes the AI delegations' ballots.
       match /ballots/{bid} {
