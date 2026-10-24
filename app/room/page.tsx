@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowsClockwise, CalendarBlank, Clock, Globe, Lock, MagnifyingGlass, Plus, Robot, UsersThree, X } from "@phosphor-icons/react";
+import { ArrowsClockwise, CalendarBlank, Clock, Globe, GraduationCap, Lock, MagnifyingGlass, Plus, Robot, UsersThree, X } from "@phosphor-icons/react";
 import PageHero from "@/components/PageHero";
 import Flag from "@/components/Flag";
 import { canonicalCountry } from "@/components/countries";
@@ -20,8 +20,10 @@ import {
   openSeats,
   type PublicRoom,
   type Room,
+  type RoomVisibility,
   type Seat,
 } from "@/lib/rooms";
+import { listMyOrgs, type Org } from "@/lib/orgs";
 import { toneStyle } from "@/lib/tone";
 
 type Tab = "find" | "host" | "join";
@@ -85,7 +87,9 @@ export default function RoomLandingPage() {
   const [endAtLocal, setEndAtLocal] = useState("");
   const [lateJoin, setLateJoin] = useState(false);
   const [judge, setJudge] = useState(true);
-  const [isPublic, setIsPublic] = useState(false);
+  const [visibility, setVisibility] = useState<RoomVisibility>("private");
+  const [orgs, setOrgs] = useState<Org[] | null>(null);
+  const [orgId, setOrgId] = useState("");
   const [code, setCode] = useState("");
   const [joinCountry, setJoinCountry] = useState("");
   const [found, setFound] = useState<{ room: Room; open: Seat[] } | null>(null);
@@ -99,11 +103,28 @@ export default function RoomLandingPage() {
 
   const userId = user?.id;
 
-  /* The list of public rooms, refreshed every few seconds while it is showing. */
+  /* The viewer's organizations: for class-only forums, both to create one and to see them listed. */
   useEffect(() => {
-    if (!userId || tab !== "find") return;
+    if (!userId) return;
     let cancelled = false;
-    listPublicRooms()
+    listMyOrgs(userId)
+      .then((o) => {
+        if (cancelled) return;
+        setOrgs(o);
+        setOrgId((cur) => cur || o[0]?.id || "");
+      })
+      .catch(() => !cancelled && setOrgs([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+  const orgKey = (orgs ?? []).map((o) => o.id).join(",");
+
+  /* The list of public and class rooms, refreshed every few seconds while it is showing. */
+  useEffect(() => {
+    if (!userId || tab !== "find" || orgs === null) return;
+    let cancelled = false;
+    listPublicRooms(orgKey ? orgKey.split(",") : [])
       .then((r) => {
         if (cancelled) return;
         setRooms(r);
@@ -115,7 +136,8 @@ export default function RoomLandingPage() {
     return () => {
       cancelled = true;
     };
-  }, [userId, tab, tick]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- orgKey stands in for orgs
+  }, [userId, tab, tick, orgKey, orgs === null]);
 
   useEffect(() => {
     if (!userId || tab !== "find") return;
@@ -233,9 +255,9 @@ export default function RoomLandingPage() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 id="find-title" className="font-display text-2xl font-bold">
-                  Public forums you can join
+                  Forums you can join
                 </h2>
-                <p className="mt-1 text-muted">Anyone can join until the host starts, or later if the host allows late joining.</p>
+                <p className="mt-1 text-muted">Public forums, and class forums from your organizations. Anyone listed can join until the host starts, or later if the host allows late joining.</p>
               </div>
               <button type="button" className="btn" onClick={() => setTick((n) => n + 1)}>
                 <ArrowsClockwise aria-hidden="true" size={16} /> Refresh
@@ -256,12 +278,12 @@ export default function RoomLandingPage() {
             )}
             {!listError && rooms?.length === 0 && (
               <div className="tone-card mt-6 p-6">
-                <p className="font-display text-xl font-bold">No public rooms right now.</p>
+                <p className="font-display text-xl font-bold">No forums to join right now.</p>
                 <p className="mt-1 max-w-[56ch] text-muted">
                   Be the first: host a public room and others will see it here. Or join a private room with its code.
                 </p>
                 <div className="mt-4 flex flex-wrap gap-3">
-                  <button type="button" className="btn btn-primary" onClick={() => { setIsPublic(true); setTab("host"); }}>
+                  <button type="button" className="btn btn-primary" onClick={() => { setVisibility("public"); setTab("host"); }}>
                     Host a public room
                   </button>
                   <button type="button" className="btn" onClick={() => setTab("join")}>
@@ -281,9 +303,15 @@ export default function RoomLandingPage() {
                           <p className="font-display text-xl font-bold leading-tight">{r.topic}</p>
                           <p className="mt-0.5 text-sm text-muted">{r.committee}</p>
                         </div>
-                        <span className="flex shrink-0 items-center gap-1 rounded-full border-2 border-ink bg-[var(--mint)] px-2.5 py-0.5 text-xs font-bold">
-                          <Globe aria-hidden="true" size={14} weight="bold" /> Public
-                        </span>
+                        {r.orgName ? (
+                          <span className="flex shrink-0 items-center gap-1 rounded-full border-2 border-ink bg-[var(--cyan)] px-2.5 py-0.5 text-xs font-bold text-[#0c2b4b]">
+                            <GraduationCap aria-hidden="true" size={14} weight="bold" /> {r.orgName}
+                          </span>
+                        ) : (
+                          <span className="flex shrink-0 items-center gap-1 rounded-full border-2 border-ink bg-[var(--mint)] px-2.5 py-0.5 text-xs font-bold">
+                            <Globe aria-hidden="true" size={14} weight="bold" /> Public
+                          </span>
+                        )}
                       </div>
                       {r.subtopic && <p className="mt-1 text-sm font-medium">Subtopic: {r.subtopic}</p>}
                       <p className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted">
@@ -408,7 +436,8 @@ export default function RoomLandingPage() {
                   seats,
                   hostSeat: hostSeat || null,
                   judge,
-                  isPublic,
+                  visibility,
+                  org: visibility === "class" ? (orgs ?? []).find((o) => o.id === orgId) ?? null : null,
                   startsAt: startMs ? new Date(startMs).toISOString() : null,
                   durationMin: endMode === "30" || endMode === "60" ? Number(endMode) : null,
                   endAt: endMs ? new Date(endMs).toISOString() : null,
@@ -421,26 +450,36 @@ export default function RoomLandingPage() {
             <div className="mt-5 grid gap-5">
               <fieldset>
                 <legend className="label">Who can find this room?</legend>
-                <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-3 sm:grid-cols-3">
                   {(
                     [
-                      [false, "Private", "Only people you give the code to can join.", Lock, "var(--sun)"],
-                      [true, "Public", "Listed under Find a room. Anyone signed in can join until you start, or later with late joining.", Globe, "var(--mint)"],
+                      ["private", "Private", "Only people you give the code to can join.", Lock, "var(--sun)"],
+                      ["public", "Public", "Listed under Find a room. Anyone signed in can join until you start, or later with late joining.", Globe, "var(--mint)"],
+                      [
+                        "class",
+                        "My class",
+                        orgs?.length ? "Listed under Find a room only for members of one of your organizations." : "Join or create an organization first.",
+                        GraduationCap,
+                        "var(--cyan)",
+                      ],
                     ] as const
-                  ).map(([value, name, text, Icon, color]) => (
+                  ).map(([value, name, text, Icon, color]) => {
+                    const off = value === "class" && !orgs?.length;
+                    return (
                     <label
                       key={name}
-                      className={`flex cursor-pointer items-start gap-3 rounded-[var(--radius-ui)] border-2 border-ink p-4 transition-all ${
-                        isPublic === value ? "shadow-[4px_4px_0_var(--ink)]" : "opacity-70 hover:opacity-100"
+                      className={`flex items-start gap-3 rounded-[var(--radius-ui)] border-2 border-ink p-4 transition-all ${
+                        off ? "cursor-not-allowed opacity-50" : visibility === value ? "cursor-pointer shadow-[4px_4px_0_var(--ink)]" : "cursor-pointer opacity-70 hover:opacity-100"
                       }`}
-                      style={{ background: isPublic === value ? color : "var(--surface)" }}
+                      style={{ background: visibility === value ? color : "var(--surface)" }}
                     >
                       <input
                         type="radio"
                         name="visibility"
                         className="sr-only"
-                        checked={isPublic === value}
-                        onChange={() => setIsPublic(value)}
+                        disabled={off}
+                        checked={visibility === value}
+                        onChange={() => setVisibility(value)}
                       />
                       <Icon aria-hidden="true" size={26} weight="fill" color="#0c2b4b" className="mt-0.5 shrink-0" />
                       <span className="text-[#0c2b4b]">
@@ -448,8 +487,21 @@ export default function RoomLandingPage() {
                         <span className="block text-sm leading-snug">{text}</span>
                       </span>
                     </label>
-                  ))}
+                    );
+                  })}
                 </div>
+                {visibility === "class" && orgs && orgs.length > 0 && (
+                  <div className="mt-3">
+                    <label htmlFor="r-org" className="label">Which organization?</label>
+                    <select id="r-org" className="field" value={orgId} onChange={(e) => setOrgId(e.target.value)}>
+                      {orgs.map((o) => (
+                        <option key={o.id} value={o.id}>
+                          {o.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </fieldset>
               <div>
                 <label htmlFor="r-committee" className="label">Committee</label>
@@ -632,10 +684,14 @@ export default function RoomLandingPage() {
               </p>
             )}
             <button type="submit" disabled={!canCreate || busy !== null} className="btn btn-primary mt-6 w-full">
-              {busy === "create" ? "Creating…" : isPublic ? "Create public forum" : "Create private forum"}
+              {busy === "create" ? "Creating…" : visibility === "public" ? "Create public forum" : visibility === "class" ? "Create class forum" : "Create private forum"}
             </button>
             <p className="helper">
-              {isPublic ? "It appears under Find a room straight away. " : "You get a code to share. "}
+              {visibility === "public"
+                ? "It appears under Find a room straight away. "
+                : visibility === "class"
+                  ? "It appears under Find a room for your organization's members, and you also get a code to share. "
+                  : "You get a code to share. "}
               The forum runs from your browser, so keep that tab open while it is live.
             </p>
           </form>

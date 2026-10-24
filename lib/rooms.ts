@@ -9,6 +9,7 @@ import {
   getDocs,
   onSnapshot,
   query,
+  type QueryFieldFilterConstraint,
   setDoc,
   Timestamp,
   updateDoc,
@@ -84,7 +85,10 @@ export interface Room {
   aiCountry: string;
   aiCountries: string[];
   judge: boolean;
-  visibility: "public" | "private";
+  visibility: RoomVisibility;
+  /** "class" rooms: the organization whose members see it listed. */
+  orgId: string | null;
+  orgName: string | null;
   status: RoomStatus;
   phase: RoomPhase;
   turnOrder: TurnEntry[];
@@ -153,7 +157,9 @@ function toRoom(id: string, r: Record<string, unknown>): Room {
     aiCountry: r.ai_country as string,
     aiCountries: aiOf(r),
     judge: r.judge as boolean,
-    visibility: r.visibility === "public" ? "public" : "private",
+    visibility: r.visibility === "public" || r.visibility === "class" ? r.visibility : "private",
+    orgId: (r.org_id as string | null) ?? null,
+    orgName: (r.org_name as string | null) ?? null,
     status: r.status as RoomStatus,
     phase: ((r.phase as RoomPhase | null) ?? "lobby"),
     turnOrder: ((r.turn_order as TurnEntry[] | null) ?? []),
@@ -214,8 +220,13 @@ export function friendlyRoomError(message: string): string {
 const randomRoomCode = () =>
   Array.from({ length: 6 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 32)]).join("");
 
+/* Private: code only. Public: listed for everyone signed in. Class: listed only for members of one organization. */
+export type RoomVisibility = "public" | "private" | "class";
+
 export async function createRoom(v: {
-  isPublic?: boolean;
+  visibility: RoomVisibility;
+  /** Required for a "class" room. */
+  org?: { id: string; name: string } | null;
   committee: string;
   topic: string;
   subtopic?: string;
@@ -236,6 +247,7 @@ export async function createRoom(v: {
   if (v.hostSeat && !hostSeat) throw new Error("Seat is not open: you cannot take an AI country's seat.");
   const ais = seats.filter((s) => s.ai).map((s) => s.country);
   if (v.durationMin !== null && !(DURATIONS as readonly number[]).includes(v.durationMin)) throw new Error("Choose a length of 30 or 60 minutes.");
+  if (v.visibility === "class" && !v.org) throw new Error("Choose which organization can see this forum.");
 
   let code = randomRoomCode();
   for (let i = 0; i < 5; i++) {
@@ -265,7 +277,9 @@ export async function createRoom(v: {
     ends_at: null,
     voting: null,
     judge: v.judge ?? true,
-    visibility: v.isPublic ? "public" : "private",
+    visibility: v.visibility,
+    org_id: v.visibility === "class" ? v.org!.id : null,
+    org_name: v.visibility === "class" ? v.org!.name : null,
     status: "lobby",
     phase: "lobby",
     turn_order: [],
@@ -324,17 +338,24 @@ export interface PublicRoom {
   endAt: string | null;
   /** A live forum that still lets people join. */
   live: boolean;
+  /** Set for a class-only forum: the organization it is listed for. */
+  orgName: string | null;
 }
 
-export async function listPublicRooms(): Promise<PublicRoom[]> {
-  const [waiting, open] = await Promise.all([
-    getDocs(query(collection(db(), "rooms"), where("visibility", "==", "public"), where("status", "==", "lobby"))),
-    getDocs(
-      query(collection(db(), "rooms"), where("visibility", "==", "public"), where("status", "==", "live"), where("late_join", "==", true)),
-    ),
-  ]);
+/** Public forums, plus class-only forums of the organizations in `orgIds` (the viewer's own). */
+export async function listPublicRooms(orgIds: string[] = []): Promise<PublicRoom[]> {
+  const all = collection(db(), "rooms");
+  const joinable = (visibility: QueryFieldFilterConstraint[]) => [
+    getDocs(query(all, ...visibility, where("status", "==", "lobby"))),
+    getDocs(query(all, ...visibility, where("status", "==", "live"), where("late_join", "==", true))),
+  ];
+  const groups: QueryFieldFilterConstraint[][] = [[where("visibility", "==", "public")]];
+  for (let i = 0; i < orgIds.length; i += 30) {
+    groups.push([where("visibility", "==", "class"), where("org_id", "in", orgIds.slice(i, i + 30))]);
+  }
+  const snaps = await Promise.all(groups.flatMap(joinable));
   const horizon = Date.now() - 6 * 3600 * 1000;
-  const fresh = [...waiting.docs, ...open.docs].filter((d) => {
+  const fresh = snaps.flatMap((s) => s.docs).filter((d) => {
     const c = d.data().created_at as Timestamp | undefined;
     return c ? c.toMillis() > horizon : false;
   });
@@ -360,6 +381,7 @@ export async function listPublicRooms(): Promise<PublicRoom[]> {
         durationMin: (r.duration_min as number | null) ?? null,
         endAt: (r.end_at as string | null) ?? null,
         live: r.status === "live",
+        orgName: r.visibility === "class" ? ((r.org_name as string | null) ?? "Your class") : null,
       };
     }),
   );
