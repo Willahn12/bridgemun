@@ -5,6 +5,7 @@ import { doc, deleteDoc, getDoc, getDocs, collection, query, where, Timestamp, w
 import { currentUser, subscribeAuth } from "@/lib/auth";
 import { db } from "@/lib/firebase";
 import type { Procedure } from "@/lib/motions";
+import type { PointType } from "@/lib/points";
 
 export type Mode = "solo" | "committee" | "table";
 
@@ -18,6 +19,10 @@ export interface Line {
   text: string;
   /** Said during an unmoderated caucus: informal, and not counted against debate time. */
   informal?: boolean;
+  /** A point the human delegate raised (not a speech, so not counted against debate time). */
+  point?: PointType;
+  /** The human delegate introducing a draft resolution (not counted against debate time). */
+  resolution?: boolean;
 }
 
 export type Phase = "opening" | "debate" | "closing" | "ended";

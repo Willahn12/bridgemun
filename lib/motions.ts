@@ -36,7 +36,33 @@ export interface Procedure {
   rounds: number;
   aiLastRound: number;
   aiSuggestions: number;
+  /** The draft resolution introduced during debate, voted on after closing statements. */
+  resolution?: Resolution;
 }
+
+export interface Resolution {
+  title: string;
+  sponsor: string;
+  clauses: string[];
+  /** Set once the committee has voted. */
+  result?: { for: number; against: number; abstain: number; passed: boolean };
+}
+
+/* Why a draft resolution cannot be introduced as written, or null if it can. */
+export function checkResolution(title: string, clauses: string[]): string | null {
+  if (title.trim().length < 3 || title.length > 150) return "Give the draft resolution a title (3 to 150 characters).";
+  if (clauses.length < 1) return "Write at least one operative clause.";
+  if (clauses.length > 8) return "Keep it to 8 operative clauses or fewer.";
+  if (clauses.some((c) => c.length < 5 || c.length > 400)) return "Each clause should be 5 to 400 characters.";
+  return null;
+}
+
+/* One clause per line; numbering and trailing punctuation typed by the student are tidied away. */
+export const splitClauses = (text: string) =>
+  text
+    .split("\n")
+    .map((c) => c.replace(/^\s*\d+[.)]\s*/, "").replace(/[;,]\s*$/, "").trim())
+    .filter(Boolean);
 
 export const DEBATE_LIMIT = 8;
 export const newProcedure = (): Procedure => ({ limit: DEBATE_LIMIT, extensions: 0, rounds: 0, aiLastRound: -99, aiSuggestions: 0 });

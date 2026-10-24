@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { complete, llmConfigured } from "@/lib/llm";
 import { AI_MOTION_TYPES, MOTION_INFO, type MotionType } from "@/lib/motions";
+import { POINT_TYPES, type PointType } from "@/lib/points";
 
 type Mode = "solo" | "committee" | "table";
-type Directive = "reply" | "continue" | "opening" | "closing" | "vote" | "open" | "adjourn" | "suggest";
-const DIRECTIVES: Directive[] = ["reply", "continue", "opening", "closing", "vote", "open", "adjourn", "suggest"];
+type Directive = "reply" | "continue" | "opening" | "closing" | "vote" | "open" | "adjourn" | "suggest" | "point";
+const DIRECTIVES: Directive[] = ["reply", "continue", "opening", "closing", "vote", "open", "adjourn", "suggest", "point"];
 
 interface Body {
   mode: Mode;
@@ -27,6 +28,10 @@ interface Body {
   informal?: boolean;
   /** The speaker's time in seconds; speeches are written to fit it. */
   seconds?: number;
+  /** point: what the human delegate raised. Information points go to the delegation in `only`. */
+  point?: { type: PointType; text: string };
+  /** vote on a draft resolution: its title and operative clauses. */
+  resolution?: { title: string; sponsor: string; clauses: string[] };
 }
 
 const short = (v: unknown, n: number) => typeof v === "string" && v.trim().length > 0 && v.length <= n;
@@ -69,7 +74,22 @@ function parse(v: unknown): Body | null {
         : undefined,
     informal: b.informal === true,
     seconds: typeof b.seconds === "number" && b.seconds >= 15 && b.seconds <= 300 ? Math.round(b.seconds) : undefined,
+    point: parsePoint(b.point),
+    resolution: parseResolution(b.resolution),
   };
+}
+
+function parsePoint(v: unknown): Body["point"] {
+  const p = v as { type?: unknown; text?: unknown } | null;
+  if (!p || !POINT_TYPES.includes(p.type as PointType) || !short(p.text, 400)) return undefined;
+  return { type: p.type as PointType, text: (p.text as string).trim() };
+}
+
+function parseResolution(v: unknown): Body["resolution"] {
+  const r = v as { title?: unknown; sponsor?: unknown; clauses?: unknown } | null;
+  if (!r || !short(r.title, 150) || !short(r.sponsor, 100) || !Array.isArray(r.clauses)) return undefined;
+  const clauses = r.clauses.filter((c): c is string => short(c, 400)).slice(0, 8);
+  return clauses.length ? { title: (r.title as string).trim(), sponsor: (r.sponsor as string).trim(), clauses } : undefined;
 }
 
 function task(b: Body): string {
@@ -85,7 +105,20 @@ function task(b: Body): string {
     case "closing":
       if (b.only) return `Write ONE closing statement, from the AI delegation "${b.only}" only. 50 to 80 words. It summarises its position, credits the strongest point made by another delegation (by name), and says whether it will support or oppose a resolution on this topic.`;
       return `Write ONE closing statement from EACH AI delegation (${all}), in that order. 50 to 80 words each. Each summarises its position, credits the strongest point made by another delegation (by name), and says whether it will support or oppose a resolution on this topic.`;
+    case "point": {
+      const pt = b.point;
+      if (pt?.type === "information" && b.only) {
+        return `The human delegate (${b.humanCountry}) has raised a point of information to "${b.only}", asking: "${pt.text}". Write exactly 1 answer, from the AI delegation "${b.only}" only. 25 to 60 words. Answer the question directly and honestly from its country's real position, starting with a short address such as "The delegation of ${b.only} thanks the delegate for the question." Do not ask a question back.`;
+      }
+      if (pt?.type === "order") {
+        return `You are the presiding judge. The human delegate (${b.humanCountry}) has raised a point of order: "${pt.text}". Using the session so far, rule on it. A point of order is about procedure: speaking time, staying on the topic, courtesy, or the order of speakers. It is not a way to disagree with what a delegate said; if it is really about content, rule it not well taken and kindly say that points of order concern procedure only and suggest a point of information or a speech instead. Start with "The point is well taken." or "The point is not well taken." and give a one-sentence reason, and if well taken, what happens now. At most 50 words. Return JSON only: {"chair":"<what you say>"}`;
+      }
+      return `You are the presiding judge. The human delegate (${b.humanCountry}) has raised a point of parliamentary inquiry: "${pt?.text ?? ""}". Answer the question about procedure clearly and accurately for THIS session: opening statements in the drawn order, then general debate, where delegates may raise motions (moderated caucus, unmoderated caucus, extend debate, close debate) and points (information, order, parliamentary inquiry); a draft resolution introduced during debate is voted on after closing statements, then the session adjourns. If the question is not about procedure, say so kindly. At most 50 words. Return JSON only: {"chair":"<what you say>"}`;
+    }
     case "vote":
+      if (b.resolution) {
+        return `The committee is in voting procedure on the draft resolution "${b.resolution.title}", sponsored by ${b.resolution.sponsor}. Its operative clauses: ${b.resolution.clauses.map((c, i) => `${i + 1}. ${c}`).join(" ")} Each AI delegation (${all}) votes "for", "against" or "abstain" on the resolution as a whole, in line with its real country's interests and how the debate has gone. Return JSON only: {"votes":[{"country":"<delegation>","vote":"for|against|abstain","reason":"<reason of at most 15 words>"}]}`;
+      }
       return `The chair has put a motion to a vote: ${b.motion ?? "close debate"}. Each AI delegation (${all}) votes "for", "against" or "abstain", in line with its real country's interests and how the debate has gone. Return JSON only: {"votes":[{"country":"<delegation>","vote":"for|against|abstain","reason":"<reason of at most 15 words>"}]}`;
     case "suggest": {
       const types = (b.allowed ?? []).map((t) => `"${t}" (${MOTION_INFO[t].label}: ${MOTION_INFO[t].when})`).join("; ");
@@ -108,7 +141,7 @@ function task(b: Body): string {
 
 function system(b: Body): string {
   const wantsChair = b.judge && !b.informal && (b.directive === "reply" || b.directive === "continue");
-  const isJudgeOnly = b.directive === "open" || b.directive === "adjourn";
+  const isJudgeOnly = b.directive === "open" || b.directive === "adjourn" || (b.directive === "point" && b.point?.type !== "information");
   const shape = isJudgeOnly || b.directive === "vote" || b.directive === "suggest"
     ? ""
     : wantsChair
@@ -189,6 +222,11 @@ export async function POST(req: Request) {
       chair?: string;
     };
     const chair = typeof parsed.chair === "string" ? parsed.chair.trim().slice(0, 500) : "";
+
+    if (body.directive === "point" && body.point?.type !== "information") {
+      if (!chair) throw new Error("The judge returned nothing.");
+      return NextResponse.json({ chair });
+    }
 
     if (body.directive === "open" || body.directive === "adjourn") {
       if (!chair) throw new Error("The judge returned nothing.");

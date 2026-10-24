@@ -7,6 +7,9 @@ import { currentUser, useAuth } from "@/lib/auth";
 import { useDictation, useSpeaker } from "@/lib/voice";
 import ReportView from "@/components/delegate/ReportView";
 import MotionPanel, { type Ballot, type Draft } from "@/components/delegate/MotionPanel";
+import PointPanel from "@/components/delegate/PointPanel";
+import { ResolutionBallot, ResolutionDraft } from "@/components/delegate/ResolutionPanel";
+import { pointLine, type PointType } from "@/lib/points";
 import {
   AI_MOTION_TYPES,
   aiMayMove,
@@ -37,7 +40,7 @@ interface Speech {
   country: string;
   text: string;
 }
-type Directive = "reply" | "continue" | "opening" | "closing" | "vote" | "open" | "adjourn" | "suggest";
+type Directive = "reply" | "continue" | "opening" | "closing" | "vote" | "open" | "adjourn" | "suggest" | "point";
 type Round = "opening" | "closing";
 
 const JUDGE_VOICE = 5;
@@ -109,6 +112,10 @@ export default function SessionView({
   const [ballot, setBallot] = useState<Motion | null>(null);
   const ballotRef = useRef<((b: Ballot) => void) | null>(null);
   const [aiNote, setAiNote] = useState<string | null>(null);
+  const [pointOpen, setPointOpen] = useState(false);
+  const [draftOpen, setDraftOpen] = useState(false);
+  const [resBallot, setResBallot] = useState(false);
+  const resBallotRef = useRef<((b: Ballot) => void) | null>(null);
   const [unmodEnds, setUnmodEnds] = useState<number | null>(null);
   const unmodRef = useRef<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -227,12 +234,12 @@ export default function SessionView({
 
   /* One AI step: optional judge line first, then any speeches. Returns false if it failed or was cancelled. */
   const aiTurn = useCallback(
-    async (directive: Directive, only?: string): Promise<boolean> => {
+    async (directive: Directive, only?: string, extra?: Record<string, unknown>): Promise<boolean> => {
       setThinking(true);
       setError(null);
       const epoch = epochRef.current;
       try {
-        const body = await call(directive, only);
+        const body = await call(directive, only, extra);
         if (epochRef.current !== epoch) return false;
         setThinking(false);
         if (body.chair) {
@@ -285,6 +292,8 @@ export default function SessionView({
     setThinking(false);
     ballotRef.current = null;
     setBallot(null);
+    resBallotRef.current = null;
+    setResBallot(false);
     setFloorOpen(false);
     unmodRef.current = null;
     setUnmodEnds(null);
@@ -305,6 +314,48 @@ export default function SessionView({
     setCursorTo(0);
     await say(`Opening statements are complete. The floor is now open for general debate on "${initial.topic}".`);
   }, [say, setCursorTo, initial.topic]);
+
+  /* After closing statements: the committee votes on the draft resolution, if one was introduced. */
+  const votingProcedure = useCallback(async () => {
+    const res = procRef.current.resolution;
+    if (!res || res.result) return;
+    const epoch = epochRef.current;
+    await say(`Closing statements are complete. The committee now moves into voting procedure on the draft resolution "${res.title}", sponsored by ${res.sponsor}.`);
+    if (epochRef.current !== epoch) return;
+    const mine = await new Promise<Ballot>((resolve) => {
+      resBallotRef.current = resolve;
+      setResBallot(true);
+    });
+    if (epochRef.current !== epoch) return;
+    setThinking(true);
+    try {
+      const body = await call("vote", undefined, { resolution: { title: res.title, sponsor: res.sponsor, clauses: res.clauses } });
+      if (epochRef.current !== epoch) return;
+      setThinking(false);
+      const votes = body.votes as { country: string; vote: string; reason: string }[];
+      const count = (v: string) => votes.filter((x) => x.vote === v).length + (mine === v ? 1 : 0);
+      const tally = { for: count("for"), against: count("against"), abstain: count("abstain") };
+      const passed = tally.for > tally.against;
+      const detail = votes.map((v) => `${v.country}: ${v.vote}${v.reason ? ` (${v.reason})` : ""}`).join(". ");
+      chair(`Vote on the draft resolution. ${humanName}: ${mine}. ${detail}.`);
+      setProcedure({ ...procRef.current, resolution: { ...res, result: { ...tally, passed } } });
+      await say(
+        `With ${tally.for} in favour, ${tally.against} against and ${tally.abstain} abstaining, the draft resolution ${passed ? "passes and is adopted by the committee" : "fails"}.`,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The vote could not be held");
+      chair("The vote on the draft resolution could not be held.");
+    } finally {
+      setThinking(false);
+    }
+  }, [say, call, chair, humanName, setProcedure]);
+
+  function castResBallot(b: Ballot) {
+    const resolve = resBallotRef.current;
+    resBallotRef.current = null;
+    setResBallot(false);
+    resolve?.(b);
+  }
 
   /* Runs the drawn speaking order for opening or closing statements. Stops at the human's turn. */
   const runRound = useCallback(
@@ -328,9 +379,13 @@ export default function SessionView({
         setCursorTo(cursorRef.current + 1);
       }
       if (stage === "opening") await enterDebate();
-      else await adjourn();
+      else {
+        await votingProcedure();
+        if (epochRef.current !== epoch) return;
+        await adjourn();
+      }
     },
-    [order, humanName, chair, say, aiTurn, setCursorTo, enterDebate, adjourn],
+    [order, humanName, chair, say, aiTurn, setCursorTo, enterDebate, adjourn, votingProcedure],
   );
 
   /* The judge opens the session and draws who goes first. */
@@ -395,7 +450,7 @@ export default function SessionView({
   }
 
   /* ---------- Motions (caucuses and extending debate) ---------- */
-  const spokenCount = (ls: Line[]) => ls.filter((l) => l.kind === "human" && !l.informal).length;
+  const spokenCount = (ls: Line[]) => ls.filter((l) => l.kind === "human" && !l.informal && !l.point && !l.resolution).length;
   const ctx = () => ({ spoken: spokenCount(linesRef.current), procedure: procRef.current, floor: floorRef.current });
 
   /* The chair opens the floor. One AI delegation may suggest a motion, if the AI rules allow it this round. */
@@ -578,7 +633,52 @@ export default function SessionView({
     runRound("closing");
   }
 
-  const humanSpeeches = lines.filter((l) => l.kind === "human" && !l.informal).length;
+  const humanSpeeches = lines.filter((l) => l.kind === "human" && !l.informal && !l.point && !l.resolution).length;
+
+  /* ---------- Draft resolution (voted on after closing statements) ---------- */
+  async function introduceResolution(title: string, clauses: string[]) {
+    silence();
+    setError(null);
+    setDraftOpen(false);
+    stickRef.current = true;
+    push({
+      id: uid(),
+      speaker: humanName,
+      kind: "human",
+      text: `Introduces the draft resolution "${title}": ${clauses.map((c, i) => `${i + 1}. ${c}`).join(" ")}`,
+      resolution: true,
+    });
+    setProcedure({ ...procRef.current, resolution: { title, sponsor: humanName, clauses } });
+    await say(`The chair thanks the delegate of ${humanName}. The draft resolution "${title}" is introduced and will be put to a vote after closing statements.`);
+    await aiTurn("reply");
+  }
+
+  /* ---------- Points (not speeches, so they do not count against debate time) ---------- */
+  async function raisePoint(type: PointType, text: string, to?: string) {
+    silence();
+    setError(null);
+    setPointOpen(false);
+    stickRef.current = true;
+    push({ id: uid(), speaker: humanName, kind: "human", text: pointLine(type, text, to), point: type });
+    const point = { type, text };
+    if (type === "information" && to) {
+      await say(`The delegate of ${to} may respond to the point of information.`);
+      await aiTurn("point", to, { point });
+      return;
+    }
+    setThinking(true);
+    const epoch = epochRef.current;
+    try {
+      const body = await call("point", undefined, { point });
+      if (epochRef.current !== epoch) return;
+      setThinking(false);
+      if (body.chair) await say(body.chair);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The chair could not rule on the point");
+    } finally {
+      setThinking(false);
+    }
+  }
   const myRoundTurn = judge && lines.length > 0 && order[cursor] === HUMAN;
   const canSpeak = phase === "debate" ? true : myRoundTurn;
 
@@ -711,6 +811,14 @@ export default function SessionView({
           <h1 className="text-xl font-semibold tracking-tight">{initial.topic}</h1>
           <p className="text-sm text-muted">{initial.committee}</p>
           {structured && <p className="mt-1 text-sm font-medium text-accent">{PHASE_LABEL[phase]}</p>}
+          {procedure.resolution && (
+            <p className="text-sm text-muted">
+              Draft resolution: &ldquo;{procedure.resolution.title}&rdquo;
+              {procedure.resolution.result
+                ? `, ${procedure.resolution.result.passed ? "adopted" : "failed"} (${procedure.resolution.result.for} for, ${procedure.resolution.result.against} against, ${procedure.resolution.result.abstain} abstaining)`
+                : ", vote after closing statements"}
+            </p>
+          )}
           {phase === "debate" && (unmodEnds !== null || procedure.caucus) && (
             <p className="text-sm text-muted">
               {unmodEnds !== null
@@ -913,7 +1021,19 @@ export default function SessionView({
 
       {!ended && (
         <div className="shrink-0 border-t border-line bg-background pb-2 pt-4">
-          {floorOpen ? (
+          {resBallot && procedure.resolution ? (
+            <div className="max-h-[50dvh] overflow-y-auto">
+              <ResolutionBallot resolution={procedure.resolution} onBallot={castResBallot} />
+            </div>
+          ) : draftOpen && !floorOpen ? (
+            <div className="max-h-[50dvh] overflow-y-auto">
+              <ResolutionDraft sponsor={humanName} busy={thinking} onIntroduce={introduceResolution} onCancel={() => setDraftOpen(false)} />
+            </div>
+          ) : pointOpen && !floorOpen ? (
+            <div className="max-h-[50dvh] overflow-y-auto">
+              <PointPanel delegations={aiCountries} busy={thinking} onRaise={raisePoint} onCancel={() => setPointOpen(false)} />
+            </div>
+          ) : floorOpen ? (
             <div className="max-h-[50dvh] overflow-y-auto">
               <MotionPanel
                 floor={floor}
@@ -1025,6 +1145,31 @@ export default function SessionView({
                       onClick={openFloor}
                     >
                       Raise a motion
+                    </button>
+                  )}
+                  {phase === "debate" && judge && (
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={thinking || unmodEnds !== null}
+                      title={unmodEnds !== null ? "Points are not taken during an unmoderated caucus" : undefined}
+                      onClick={() => setPointOpen(true)}
+                    >
+                      Raise a point
+                    </button>
+                  )}
+                  {phase === "debate" && judge && !procedure.resolution && (
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={thinking || humanSpeeches === 0 || unmodEnds !== null}
+                      title={humanSpeeches === 0 ? "Speak once before introducing a draft resolution" : undefined}
+                      onClick={() => {
+                        setPointOpen(false);
+                        setDraftOpen(true);
+                      }}
+                    >
+                      Draft resolution
                     </button>
                   )}
                   {phase === "debate" && unmodEnds !== null && (

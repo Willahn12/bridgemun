@@ -24,9 +24,11 @@ export default function ReportView({
   aiCountries: string[];
 }) {
   const mine = lines.filter((l) => l.kind === "human");
+  // Points and introducing a draft resolution are not speeches.
+  const speeches = mine.filter((l) => !l.point && !l.resolution);
   const words = mine.reduce((n, l) => n + l.text.trim().split(/\s+/).filter(Boolean).length, 0);
   const stats = [
-    { label: "Your speeches", value: String(mine.length) },
+    { label: "Your speeches", value: String(speeches.length) },
     { label: "Words spoken", value: String(words) },
     { label: "Length", value: startedAt && endedAt ? minutes(endedAt - startedAt) : "Not recorded" },
     { label: "AI delegations", value: String(aiCountries.length) },

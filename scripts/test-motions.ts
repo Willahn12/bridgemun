@@ -1,5 +1,6 @@
 /* Rule checks for lib/motions.ts. Run: node --experimental-strip-types scripts/test-motions.ts */
-import { byPriority, checkMotion, aiMayMove, caucusSpeeches, newProcedure, type Motion } from "../lib/motions.ts";
+import { byPriority, checkMotion, aiMayMove, caucusSpeeches, newProcedure, checkResolution, splitClauses, type Motion } from "../lib/motions.ts";
+import { checkPoint, pointLine } from "../lib/points.ts";
 
 let failed = 0;
 const check = (name: string, ok: boolean, extra = "") => {
@@ -42,6 +43,17 @@ const order = [
 ].sort(byPriority).map((x) => `${x.type}:${x.minutes ?? ""}:${x.mover}`);
 check("vote order: close, longer unmod, human before AI, mod, extend",
   order.join(",") === "close::human,unmod:6:ai,unmod:3:human,unmod:3:ai,mod:4:human,extend::human", order.join(","));
+
+const clauses = splitClauses("1. Calls upon states to act;\n\n2) Requests a fund,\nEncourages recycling");
+check("clauses: numbering and trailing punctuation removed", clauses.join("|") === "Calls upon states to act|Requests a fund|Encourages recycling", clauses.join("|"));
+check("resolution: valid", checkResolution("Plastic treaty", clauses) === null);
+check("resolution: needs a title", checkResolution("ab", clauses) !== null);
+check("resolution: needs a clause", checkResolution("Plastic treaty", []) !== null);
+check("resolution: max 8 clauses", checkResolution("Plastic treaty", Array(9).fill("Calls upon all")) !== null);
+check("point of information needs a delegation", checkPoint("information", "How is it funded?", undefined, ["India"]) !== null);
+check("point of information to a real delegation ok", checkPoint("information", "How is it funded?", "India", ["India"]) === null);
+check("point of order needs words", checkPoint("order", "no", undefined, []) !== null);
+check("point line reads naturally", pointLine("information", "Why?", "India") === "Point of information to India: Why?");
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);
