@@ -24,7 +24,7 @@ export type Phase = "opening" | "debate" | "closing" | "ended";
 
 export const PHASE_LABEL: Record<Phase, string> = {
   opening: "Opening statements",
-  debate: "Moderated caucus",
+  debate: "General debate",
   closing: "Closing statements",
   ended: "Adjourned",
 };

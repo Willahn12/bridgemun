@@ -303,7 +303,7 @@ export default function SessionView({
   const enterDebate = useCallback(async () => {
     setPhase("debate");
     setCursorTo(0);
-    await say(`Opening statements are complete. The floor is now open for moderated caucus on "${initial.topic}".`);
+    await say(`Opening statements are complete. The floor is now open for general debate on "${initial.topic}".`);
   }, [say, setCursorTo, initial.topic]);
 
   /* Runs the drawn speaking order for opening or closing statements. Stops at the human's turn. */
