@@ -6,6 +6,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
   query,
   serverTimestamp,
   setDoc,
@@ -46,6 +47,15 @@ const toIso = (t: unknown) => (t instanceof Timestamp ? t.toDate().toISOString()
 const randomCode = () =>
   Array.from({ length: 8 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 32)]).join("");
 
+/* The caller's own membership in an org, or null. Read with a query pinned to their user id: firestore.rules
+   only lets a get() through when the document exists, so getDoc on a membership that is not there yet fails. */
+async function myMembershipIn(orgId: string, userId: string) {
+  const snap = await getDocs(
+    query(collection(db(), "memberships"), where("userId", "==", userId), where("orgId", "==", orgId), limit(1)),
+  );
+  return snap.docs[0] ?? null;
+}
+
 export async function myDisplayName(userId: string): Promise<string> {
   const snap = await getDoc(doc(db(), "users", userId));
   return (snap.data()?.displayName as string | undefined)?.trim() || "Unnamed";
@@ -66,11 +76,8 @@ export async function listMyOrgs(userId: string): Promise<Org[]> {
 }
 
 export async function getOrg(orgId: string, userId: string): Promise<Org | null> {
-  const [orgSnap, memberSnap] = await Promise.all([
-    getDoc(doc(db(), "organizations", orgId)),
-    getDoc(doc(db(), "memberships", membershipId(orgId, userId))),
-  ]);
-  if (!orgSnap.exists() || !memberSnap.exists()) return null;
+  const [orgSnap, memberSnap] = await Promise.all([getDoc(doc(db(), "organizations", orgId)), myMembershipIn(orgId, userId)]);
+  if (!orgSnap.exists() || !memberSnap) return null;
   const o = orgSnap.data();
   return { id: orgSnap.id, name: o.name as string, inviteCode: o.inviteCode as string, role: memberSnap.data().role as Role };
 }
@@ -109,8 +116,7 @@ export async function joinOrg(code: string): Promise<string> {
   const orgId = snap.docs[0].id;
 
   const memberRef = doc(db(), "memberships", membershipId(orgId, uid));
-  const existing = await getDoc(memberRef);
-  if (!existing.exists()) {
+  if (!(await myMembershipIn(orgId, uid))) {
     const name = await myDisplayName(uid);
     await setDoc(memberRef, { orgId, userId: uid, role: "student", name, joinedAt: serverTimestamp() });
   }
