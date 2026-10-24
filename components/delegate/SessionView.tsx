@@ -45,6 +45,8 @@ interface Speech {
 }
 type Directive = "reply" | "continue" | "opening" | "closing" | "vote" | "open" | "adjourn" | "suggest" | "point";
 type Round = "opening" | "closing";
+/* What the model has written so far, while a reply streams in. */
+type Partial = { chair?: string; speeches?: { country: string; text: string }[] };
 
 const JUDGE_VOICE = 5;
 /* Firestore rejects undefined fields, so the caucus key is removed rather than cleared. */
@@ -116,6 +118,7 @@ export default function SessionView({
   const ballotRef = useRef<((b: Ballot) => void) | null>(null);
   const [aiNote, setAiNote] = useState<string | null>(null);
   const [pointOpen, setPointOpen] = useState(false);
+  const [draft, setDraft] = useState<{ who: string; text: string } | null>(null);
   const [positions, setPositionsState] = useState<Position[]>(initial.positions ?? []);
   const positionsRef = useRef<Position[]>(initial.positions ?? []);
   const [draftOpen, setDraftOpen] = useState(false);
@@ -209,7 +212,7 @@ export default function SessionView({
   );
 
   const call = useCallback(
-    async (directive: Directive, only?: string, extra?: Record<string, unknown>) => {
+    async (directive: Directive, only?: string, extra?: Record<string, unknown>, onPartial?: (p: Partial) => void) => {
       const caucus = procRef.current.caucus;
       const res = await fetch("/api/delegate", {
         method: "POST",
@@ -228,24 +231,56 @@ export default function SessionView({
           caucus: caucus ? { topic: caucus.topic, speakingTime: caucus.speakingTime } : undefined,
           informal: unmodRef.current !== null,
           positions: positionsRef.current.map(briefLine),
+          ...(onPartial ? { stream: true } : {}),
           ...extra,
         }),
       });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "Request failed");
-      return body;
+      if (!onPartial || !res.ok || !res.body) {
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.error ?? "Request failed");
+        return body;
+      }
+      // Streamed: show the words as they are written, then use the checked final reply.
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, nl).trim();
+          buffer = buffer.slice(nl + 1);
+          if (!line) continue;
+          const ev = JSON.parse(line) as { type: string; error?: string } & Partial & Record<string, unknown>;
+          if (ev.type === "partial") onPartial(ev);
+          else if (ev.type === "error") throw new Error(ev.error ?? "Request failed");
+          else if (ev.type === "final") {
+            delete (ev as { type?: string }).type;
+            return ev;
+          }
+        }
+      }
+      throw new Error("The reply was cut off. Try again.");
     },
     [mode, initial, aiCountries, judge, order, nameOf],
   );
 
-  /* One AI step: optional judge line first, then any speeches. Returns false if it failed or was cancelled. */
+  /* One AI step: optional judge line first, then any speeches. Returns false if it failed or was cancelled.
+     The reply streams in, so the student sees the words while they are still being written. */
   const aiTurn = useCallback(
     async (directive: Directive, only?: string, extra?: Record<string, unknown>): Promise<boolean> => {
       setThinking(true);
       setError(null);
       const epoch = epochRef.current;
       try {
-        const body = await call(directive, only, extra);
+        const body = await call(directive, only, extra, (p) => {
+          if (epochRef.current !== epoch) return;
+          const last = p.speeches?.[p.speeches.length - 1];
+          setDraft(last?.text ? { who: last.country, text: last.text } : p.chair ? { who: "Judge", text: p.chair } : null);
+        });
+        setDraft(null);
         if (epochRef.current !== epoch) return false;
         setThinking(false);
         if (body.chair) {
@@ -258,6 +293,7 @@ export default function SessionView({
         setError(e instanceof Error ? e.message : "Something went wrong");
         return false;
       } finally {
+        setDraft(null);
         setThinking(false);
       }
     },
@@ -1060,7 +1096,25 @@ export default function SessionView({
             </div>
           ),
         )}
-        {thinking && <p className="text-sm text-muted">The delegation is preparing a reply.</p>}
+        {draft ? (
+          draft.who === "Judge" ? (
+            <p className="max-w-[72ch] border-l-2 border-line pl-3 text-sm leading-relaxed text-muted" aria-hidden="true">
+              <span className="font-medium text-ink">Judge. </span>
+              {draft.text}
+              <span className="stream-caret" />
+            </p>
+          ) : (
+            <div className="max-w-[88%]" aria-hidden="true">
+              <p className="mb-1 text-xs font-medium text-muted">{draft.who}</p>
+              <div className="break-words rounded-[var(--radius-ui)] border border-line bg-surface p-3.5 leading-relaxed">
+                {draft.text}
+                <span className="stream-caret" />
+              </div>
+            </div>
+          )
+        ) : (
+          thinking && <p className="text-sm text-muted">The delegation is preparing a reply.</p>
+        )}
         {stalled && (
           <button type="button" className="btn" onClick={() => runRound(phase as Round)}>
             <Play aria-hidden="true" size={16} weight="fill" /> Continue the session

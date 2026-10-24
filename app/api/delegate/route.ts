@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { complete, llmConfigured } from "@/lib/llm";
+import { complete, completeStream, llmConfigured } from "@/lib/llm";
 import { AI_MOTION_TYPES, MOTION_INFO, type MotionType } from "@/lib/motions";
 import { POINT_TYPES, type PointType } from "@/lib/points";
 
@@ -192,11 +192,98 @@ Speech rules:
   }`;
 }
 
+/* Checks and trims the model's JSON into what the app expects. Throws if it is unusable. */
+function finalize(body: Body, raw: string, allowed: Map<string, string>): Record<string, unknown> {
+  const parsed = JSON.parse(raw) as {
+    speeches?: { country?: string; text?: string }[];
+    votes?: { country?: string; vote?: string; reason?: string }[];
+    motion?: Record<string, unknown> | null;
+    chair?: string;
+  };
+  const chair = typeof parsed.chair === "string" ? parsed.chair.trim().slice(0, 500) : "";
+
+  if (body.directive === "point" && body.point?.type !== "information") {
+    if (!chair) throw new Error("The judge returned nothing.");
+    return { chair };
+  }
+
+  if (body.directive === "open" || body.directive === "adjourn") {
+    if (!chair) throw new Error("The judge returned nothing.");
+    // The model sometimes carries on the debate instead of closing it; never let that through.
+    if (body.directive === "adjourn" && !/adjourn/i.test(chair)) {
+      return { chair: "Thank you, delegates, for your contributions today. This session is now adjourned." };
+    }
+    return { chair };
+  }
+
+  if (body.directive === "vote") {
+    const votes = (parsed.votes ?? [])
+      .map((v) => ({
+        country: allowed.get((v.country ?? "").toLowerCase()),
+        vote: ["for", "against", "abstain"].includes(v.vote ?? "") ? (v.vote as string) : "abstain",
+        reason: (v.reason ?? "").trim(),
+      }))
+      .filter((v): v is { country: string; vote: string; reason: string } => Boolean(v.country));
+    if (!votes.length) throw new Error("The model returned no votes.");
+    return { votes };
+  }
+
+  if (body.directive === "suggest") {
+    const m = parsed.motion;
+    const country = allowed.get(String(m?.country ?? "").toLowerCase());
+    const type = m?.type as MotionType;
+    if (!m || !country || !(body.allowed ?? []).includes(type)) return { motion: null };
+    const int = (v: unknown) => (typeof v === "number" ? Math.round(v) : undefined);
+    return {
+      motion: {
+        country,
+        type,
+        topic: typeof m.topic === "string" ? m.topic.trim().slice(0, 120) : undefined,
+        minutes: int(m.minutes),
+        speakingTime: int(m.speakingTime),
+        extra: int(m.extra),
+        reason: typeof m.reason === "string" ? m.reason.trim().slice(0, 200) : undefined,
+      },
+    };
+  }
+
+  const limit = body.only ? 1 : body.directive === "opening" || body.directive === "closing" ? 5 : 2;
+  const speeches = (parsed.speeches ?? [])
+    .map((s) => ({ country: allowed.get((s.country ?? "").toLowerCase()), text: (s.text ?? "").trim() }))
+    .filter((s): s is { country: string; text: string } => Boolean(s.country && s.text))
+    .slice(0, limit);
+  if (!speeches.length) throw new Error("The model returned no usable speech.");
+  // Only debate replies carry the judge's words; for opening and closing statements the app has already
+  // recognized the speaker, and a second recognition from the model would repeat it.
+  const wantsChair = body.judge && !body.informal && (body.directive === "reply" || (body.directive === "continue" && !body.only));
+  return { speeches, ...(wantsChair && chair ? { chair } : {}) };
+}
+
+/* While the model is still writing: the speeches (and judge line) so far, for showing them as they appear.
+   Tolerant of cut-off JSON; strings that are not finished yet are returned as far as they go. */
+const STR = String.raw`"((?:[^"\\]|\\.)*)("|$)`;
+function readPartial(raw: string): { chair?: string; speeches: { country: string; text: string }[] } {
+  const unescape = (t: string) => {
+    try {
+      return JSON.parse(`"${t.replace(/\\$/, "")}"`) as string;
+    } catch {
+      return t;
+    }
+  };
+  const chair = raw.match(new RegExp(String.raw`"chair"\s*:\s*` + STR));
+  const speeches = [...raw.matchAll(new RegExp(String.raw`"country"\s*:\s*"([^"]*)"\s*,\s*"text"\s*:\s*` + STR, "g"))].map((m) => ({
+    country: m[1],
+    text: unescape(m[2]),
+  }));
+  return { ...(chair ? { chair: unescape(chair[1]) } : {}), speeches };
+}
+
 export async function POST(req: Request) {
   if (!llmConfigured()) {
     return NextResponse.json({ error: "OPENAI_API_KEY is not set on the server." }, { status: 500 });
   }
-  const body = parse(await req.json().catch(() => null));
+  const json = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+  const body = parse(json);
   if (!body) return NextResponse.json({ error: "Invalid request." }, { status: 400 });
 
   const transcript = body.lines.length
@@ -206,86 +293,53 @@ export async function POST(req: Request) {
         .join("\n")
     : "(The session has just started. Nobody has spoken yet.)";
   const allowed = new Map(body.aiCountries.map((c) => [c.toLowerCase(), c]));
+  const request = {
+    system: system(body),
+    maxTokens: 1400,
+    json: true,
+    messages: [
+      {
+        role: "user" as const,
+        content: `Session so far:\n${transcript}\n\n${
+          body.directive === "adjourn"
+            ? "The session is over now. Do not call on any delegation. Give your closing remarks and adjourn."
+            : "Proceed."
+        }`,
+      },
+    ],
+  };
+
+  /* Streaming: one JSON object per line. {"type":"partial",...} while writing, then {"type":"final",...}
+     with exactly what the non-streaming response would have been, or {"type":"error",...}. */
+  if (json?.stream === true) {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const send = (obj: unknown) => controller.enqueue(encoder.encode(`${JSON.stringify(obj)}\n`));
+        let raw = "";
+        let lastSent = 0;
+        try {
+          for await (const delta of completeStream(request)) {
+            raw += delta;
+            if (raw.length - lastSent > 24) {
+              lastSent = raw.length;
+              send({ type: "partial", ...readPartial(raw) });
+            }
+          }
+          send({ type: "final", ...finalize(body, raw, allowed) });
+        } catch (e) {
+          send({ type: "error", error: "The delegates could not respond.", detail: e instanceof Error ? e.message : "Unknown error" });
+        } finally {
+          controller.close();
+        }
+      },
+    });
+    return new Response(stream, { headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-store" } });
+  }
 
   try {
-    const raw = await complete({
-      system: system(body),
-      maxTokens: 1400,
-      json: true,
-      messages: [
-        {
-          role: "user",
-          content: `Session so far:\n${transcript}\n\n${
-            body.directive === "adjourn"
-              ? "The session is over now. Do not call on any delegation. Give your closing remarks and adjourn."
-              : "Proceed."
-          }`,
-        },
-      ],
-    });
-    const parsed = JSON.parse(raw) as {
-      speeches?: { country?: string; text?: string }[];
-      votes?: { country?: string; vote?: string; reason?: string }[];
-      motion?: Record<string, unknown> | null;
-      chair?: string;
-    };
-    const chair = typeof parsed.chair === "string" ? parsed.chair.trim().slice(0, 500) : "";
-
-    if (body.directive === "point" && body.point?.type !== "information") {
-      if (!chair) throw new Error("The judge returned nothing.");
-      return NextResponse.json({ chair });
-    }
-
-    if (body.directive === "open" || body.directive === "adjourn") {
-      if (!chair) throw new Error("The judge returned nothing.");
-      // The model sometimes carries on the debate instead of closing it; never let that through.
-      if (body.directive === "adjourn" && !/adjourn/i.test(chair)) {
-        return NextResponse.json({ chair: "Thank you, delegates, for your contributions today. This session is now adjourned." });
-      }
-      return NextResponse.json({ chair });
-    }
-
-    if (body.directive === "vote") {
-      const votes = (parsed.votes ?? [])
-        .map((v) => ({
-          country: allowed.get((v.country ?? "").toLowerCase()),
-          vote: ["for", "against", "abstain"].includes(v.vote ?? "") ? (v.vote as string) : "abstain",
-          reason: (v.reason ?? "").trim(),
-        }))
-        .filter((v): v is { country: string; vote: string; reason: string } => Boolean(v.country));
-      if (!votes.length) throw new Error("The model returned no votes.");
-      return NextResponse.json({ votes });
-    }
-
-    if (body.directive === "suggest") {
-      const m = parsed.motion;
-      const country = allowed.get(String(m?.country ?? "").toLowerCase());
-      const type = m?.type as MotionType;
-      if (!m || !country || !(body.allowed ?? []).includes(type)) return NextResponse.json({ motion: null });
-      const int = (v: unknown) => (typeof v === "number" ? Math.round(v) : undefined);
-      return NextResponse.json({
-        motion: {
-          country,
-          type,
-          topic: typeof m.topic === "string" ? m.topic.trim().slice(0, 120) : undefined,
-          minutes: int(m.minutes),
-          speakingTime: int(m.speakingTime),
-          extra: int(m.extra),
-          reason: typeof m.reason === "string" ? m.reason.trim().slice(0, 200) : undefined,
-        },
-      });
-    }
-
-    const limit = body.only ? 1 : body.directive === "opening" || body.directive === "closing" ? 5 : 2;
-    const speeches = (parsed.speeches ?? [])
-      .map((s) => ({ country: allowed.get((s.country ?? "").toLowerCase()), text: (s.text ?? "").trim() }))
-      .filter((s): s is { country: string; text: string } => Boolean(s.country && s.text))
-      .slice(0, limit);
-    if (!speeches.length) throw new Error("The model returned no usable speech.");
-    // Only debate replies carry the judge's words; for opening and closing statements the app has already
-    // recognized the speaker, and a second recognition from the model would repeat it.
-    const wantsChair = body.judge && !body.informal && (body.directive === "reply" || (body.directive === "continue" && !body.only));
-    return NextResponse.json({ speeches, ...(wantsChair && chair ? { chair } : {}) });
+    const raw = await complete(request);
+    return NextResponse.json(finalize(body, raw, allowed));
   } catch (e) {
     const detail = e instanceof Error ? e.message : "Unknown error";
     return NextResponse.json({ error: "The delegates could not respond.", detail }, { status: 502 });

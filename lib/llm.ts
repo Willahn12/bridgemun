@@ -93,3 +93,19 @@ export async function* researchStream(opts: { system: string; input: string; max
   }
   yield { type: "done", sources: [...sources.values()].slice(0, 20) };
 }
+
+/* The same request as complete(), but yields the reply's text as it is written. */
+export async function* completeStream(opts: { system: string; messages: ChatTurn[]; maxTokens: number; json?: boolean }): AsyncGenerator<string> {
+  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const stream = await client.chat.completions.create({
+    model: MODEL,
+    max_completion_tokens: opts.maxTokens,
+    ...(opts.json ? { response_format: { type: "json_object" as const } } : {}),
+    messages: [{ role: "system", content: opts.system }, ...opts.messages],
+    stream: true,
+  });
+  for await (const chunk of stream) {
+    const d = chunk.choices[0]?.delta?.content;
+    if (d) yield d;
+  }
+}

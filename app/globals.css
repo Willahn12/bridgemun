@@ -331,3 +331,20 @@ html[data-motion="full"] .nudge { animation: nudge 1.6s ease-in-out infinite; }
 /* A voice meter that breathes. */
 html[data-motion="full"] .eq { animation: eq 1.1s ease-in-out infinite alternate; transform-origin: bottom; }
 @keyframes eq { from { transform: scaleY(0.55); } to { transform: scaleY(1); } }
+
+/* Blinking caret after text that is still streaming in. */
+.stream-caret {
+  display: inline-block;
+  width: 0.5ch;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.12em;
+  background: currentColor;
+  opacity: 0.6;
+}
+html[data-motion="full"] .stream-caret {
+  animation: stream-caret 1s steps(1) infinite;
+}
+@keyframes stream-caret {
+  50% { opacity: 0; }
+}
