@@ -3,12 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowUp, Broadcast, Check, CheckSquare, Copy, Microphone, MicrophoneSlash, Play, Robot, ShieldCheck, SignOut, SpeakerHigh, Stop, Timer, UsersThree, X } from "@phosphor-icons/react";
+import { ArrowUp, Broadcast, Check, VideoCamera, VideoCameraSlash, CheckSquare, Copy, Microphone, MicrophoneSlash, Play, Robot, ShieldCheck, SignOut, SpeakerHigh, Stop, Timer, UsersThree, X } from "@phosphor-icons/react";
 import { defaultVoice, PERSON_VOICES, rememberedVoice, rememberVoice } from "@/lib/voices";
 import { toneStyle } from "@/lib/tone";
-import ZoomTile from "@/components/ZoomTile";
+import LiveVideo from "@/components/LiveVideo";
 import NotesPanel from "@/components/NotesPanel";
-import { createForumMeeting, zoomAvailable } from "@/lib/zoomClient";
+import { useLiveStage } from "@/lib/useLiveStage";
 import { broadcast, listen, type Broadcast as LiveLink } from "@/lib/liveAudio";
 import { useAuth, displayName } from "@/lib/auth";
 import { useDictation, useRecorder, useSpeaker } from "@/lib/voice";
@@ -134,8 +134,7 @@ export default function RoomPage() {
   const [question, setQuestion] = useState("");
   const [voteBusy, setVoteBusy] = useState(false);
   const [seatBusy, setSeatBusy] = useState<string | null>(null);
-  const [videoReady, setVideoReady] = useState(false); // the server has Zoom keys
-  const [videoBusy, setVideoBusy] = useState(false);
+  const [cameraOn, setCameraOn] = useState(false); // send video too when talking live (LiveKit only)
   /* The pop-up with this person's speaking times shows once per forum. */
   const [timesSeen, setTimesSeen] = useState(() => {
     try {
@@ -184,6 +183,8 @@ export default function RoomPage() {
   const me = members.find((m) => m.userId === userId);
   const myLabel = me?.country || (user ? displayName(user) : "You");
   const myTurn = !!room && room.status === "live" && !!userId && room.turnUser === userId;
+  /* Live audio and video through LiveKit when the server has keys; otherwise direct browser-to-browser audio. */
+  const { audioBox: liveAudioBox, ...stage } = useLiveStage(id, room?.turnUser ?? null, room?.status === "live");
   usePinHeader(!!room && room.status !== "ended");
 
   /* ----- Speaking the AI and judge lines that arrive, one after another ----- */
@@ -649,7 +650,6 @@ export default function RoomPage() {
         { status: "live", phase: "opening", turn_order: order, cursor: 0, turn_user: null, turn_deadline: null, live_at: liveAt, ends_at: endsAt, limits },
         { status: "live", phase: "opening", turnOrder: order, cursor: 0, turnUser: null, turnDeadline: null, liveAt, endsAt, limits },
       );
-      addVideo(); // the forum does not wait for Zoom; video joins whenever it is ready
       if (r.judge) await runAi("open", undefined, order.map((o) => o.name));
       drive("opening", 0);
     } catch (e) {
@@ -657,22 +657,6 @@ export default function RoomPage() {
     } finally {
       setStarting(false);
       startingRef.current = false;
-    }
-  }
-
-  /* Host only: gives the live forum its own Zoom meeting, if the server has Zoom keys. */
-  async function addVideo() {
-    const r = roomRef.current;
-    if (!r || r.zoom || !(await zoomAvailable())) return;
-    setVideoBusy(true);
-    try {
-      const minutes = r.endsAt ? Math.ceil((Date.parse(r.endsAt) - Date.now()) / 60000) + 10 : 120;
-      const zoom = await createForumMeeting(agenda(r), minutes);
-      await patchRoom({ zoom }, { zoom });
-    } catch (e) {
-      setError(`Video could not start: ${e instanceof Error ? e.message : "Zoom did not answer."} The forum carries on without it.`);
-    } finally {
-      setVideoBusy(false);
     }
   }
 
@@ -776,7 +760,7 @@ export default function RoomPage() {
   /* Everyone: plays whoever is talking live, as long as "Speak replies" is on. */
   const isLive = room?.status === "live";
   useEffect(() => {
-    if (!isLive || !userId) return;
+    if (!isLive || !userId || stage.available) return;
     return listen(
       id,
       userId,
@@ -789,19 +773,10 @@ export default function RoomPage() {
       },
       (from) => setHearing((h) => (h === from ? null : h)),
     );
-  }, [id, isLive, userId]);
+  }, [id, isLive, userId, stage.available]);
   useEffect(() => {
     if (liveAudioRef.current) liveAudioRef.current.muted = !speakOn;
   }, [speakOn]);
-
-  /* Whether to offer video at all. */
-  useEffect(() => {
-    let on = true;
-    zoomAvailable().then((ok) => on && setVideoReady(ok));
-    return () => {
-      on = false;
-    };
-  }, []);
 
   /* Everyone: live ballots for the vote that is open or was last held. */
   const voteId = room?.voting?.id;
@@ -904,46 +879,6 @@ export default function RoomPage() {
     }
   }
 
-  /* Talking live: the microphone goes to everyone in the room now, and the captions become the speech's text. */
-  async function goLive() {
-    if (!room || !userId || broadcasting) return;
-    setError(null);
-    try {
-      const listeners = membersRef.current.filter((m) => m.userId !== userId).map((m) => m.userId);
-      liveRef.current = await broadcast(room.id, userId, listeners);
-      setLivePaused(false);
-      setBroadcasting(true);
-      dictation.start();
-    } catch (e) {
-      setError(
-        e instanceof DOMException && e.name === "NotAllowedError"
-          ? "Microphone access was blocked. Allow it in your browser settings."
-          : friendlyRoomError(e instanceof Error ? e.message : "Could not go live."),
-      );
-    }
-  }
-
-  /* Pausing mutes the microphone and the captions; the connection stays open so resuming is instant. */
-  function togglePause() {
-    const live = liveRef.current;
-    if (!live) return;
-    const next = !livePaused;
-    live.setPaused(next);
-    setLivePaused(next);
-    if (next) dictation.stop();
-    else dictation.start();
-  }
-
-  async function endLive(andSend: boolean) {
-    dictation.stop();
-    const live = liveRef.current;
-    liveRef.current = null;
-    setBroadcasting(false);
-    setLivePaused(false);
-    await live?.stop().catch(() => {});
-    if (andSend) await send(input.trim() || "(Spoke live)", false, true);
-  }
-
   async function chooseVoice(v: number) {
     rememberVoice(v);
     if (!room) return;
@@ -965,14 +900,6 @@ export default function RoomPage() {
     }
   }
 
-  /* When the turn ends, stop listening and throw away an unfinished recording. */
-  useEffect(() => {
-    if (myTurn) return;
-    dictation.stop();
-    recorder.stop();
-    if (liveRef.current) endLive(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [myTurn]);
 
   useEffect(() => {
     lateJoinRef.current = (mm) => {
@@ -1026,6 +953,61 @@ export default function RoomPage() {
       setSending(false);
     }
   }
+
+  /* Talking live: the microphone goes to everyone in the room now, and the captions become the speech's text. */
+  async function goLive() {
+    if (!room || !userId || broadcasting) return;
+    setError(null);
+    try {
+      if (stage.available) {
+        await stage.goLive(cameraOn);
+      } else {
+        const listeners = membersRef.current.filter((m) => m.userId !== userId).map((m) => m.userId);
+        liveRef.current = await broadcast(room.id, userId, listeners);
+      }
+      setLivePaused(false);
+      setBroadcasting(true);
+      dictation.start();
+    } catch (e) {
+      setError(
+        e instanceof DOMException && e.name === "NotAllowedError"
+          ? "Microphone access was blocked. Allow it in your browser settings."
+          : friendlyRoomError(e instanceof Error ? e.message : "Could not go live."),
+      );
+    }
+  }
+
+  /* Pausing mutes the microphone and the captions; the connection stays open so resuming is instant. */
+  function togglePause() {
+    if (!broadcasting) return;
+    const next = !livePaused;
+    if (stage.available) stage.setMic(!next);
+    else liveRef.current?.setPaused(next);
+    setLivePaused(next);
+    if (next) dictation.stop();
+    else dictation.start();
+  }
+
+  async function endLive(andSend: boolean) {
+    dictation.stop();
+    const live = liveRef.current;
+    liveRef.current = null;
+    setBroadcasting(false);
+    setLivePaused(false);
+    await live?.stop().catch(() => {});
+    if (stage.available) await stage.end().catch(() => {});
+    if (andSend) await send(input.trim() || "(Spoke live)", false, true);
+  }
+
+  /* When the turn ends, stop listening and throw away an unfinished recording. */
+  useEffect(() => {
+    if (myTurn) return;
+    dictation.stop();
+    recorder.stop();
+    if (liveRef.current || broadcasting) endLive(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myTurn]);
+
 
   if (!ready || (user && room === undefined)) {
     return (
@@ -1344,13 +1326,23 @@ export default function RoomPage() {
           </div>
 
           <div className="relative flex aspect-[4/3] flex-col items-center justify-center overflow-hidden rounded-[var(--radius-ui)] bg-[#0c1a2b] p-4 text-white xl:aspect-[3/4]">
-            {live && room.zoom ? (
-              <ZoomTile meetingNumber={room.zoom.meetingNumber} password={room.zoom.password} userName={myLabel}>
-                {floorCard}
-              </ZoomTile>
+            {stage.remoteVideo ? (
+              <LiveVideo track={stage.remoteVideo} />
+            ) : stage.localVideo ? (
+              <LiveVideo track={stage.localVideo} mirrored />
             ) : (
               floorCard
             )}
+            {stage.blocked && (
+              <button
+                type="button"
+                onClick={stage.unblock}
+                className="absolute bottom-10 left-1/2 z-10 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-sm font-bold text-[#0c1a2b] shadow-lg"
+              >
+                Click to hear the live speaker
+              </button>
+            )}
+            <div ref={liveAudioBox} className="hidden" aria-hidden="true" />
             {live && secondsLeft !== null && (
               <p
                 className={`absolute right-3 top-3 rounded-full px-2.5 py-0.5 font-mono text-sm font-semibold ${lowTime ? "bg-danger" : "bg-white/15"}`}
@@ -1362,7 +1354,7 @@ export default function RoomPage() {
             <p className="absolute bottom-3 left-3 text-xs text-white/70">
               {speakingNow ? `${speakingNow.country} (speaking)` : "Floor"}
             </p>
-            {(hearing || broadcasting) && (
+            {(hearing || broadcasting || stage.hearing) && (
               <p className="absolute left-3 top-3 flex items-center gap-1.5 rounded-full bg-danger px-2.5 py-0.5 text-xs font-bold uppercase tracking-wider">
                 <span className="size-1.5 animate-pulse rounded-full bg-white" aria-hidden="true" />{" "}
                 {broadcasting ? (livePaused ? "You are paused" : "You are live") : "Live voice"}
@@ -1382,11 +1374,6 @@ export default function RoomPage() {
                   {moderator ? `${moderator.name}${moderator.userId === userId ? " (you)" : ""}` : host ? `${host.name}, host` : ""}
                 </span>
               </h2>
-              {isHost && live && videoReady && !room.zoom && (
-                <button type="button" className="btn" disabled={videoBusy} onClick={addVideo}>
-                  {videoBusy ? "Starting video…" : "Start video"}
-                </button>
-              )}
               {isHost && live && (
                 <button type="button" className="btn border-danger text-danger" disabled={ending} onClick={endEarly}>
                   {ending ? "Ending…" : "End forum session"}
@@ -1654,6 +1641,11 @@ export default function RoomPage() {
               {error}
             </p>
           )}
+          {stage.error && myTurn && (
+            <p role="alert" className="mb-2 shrink-0 text-sm text-danger">
+              {stage.error}
+            </p>
+          )}
           {recorder.error && (
             <p role="alert" className="mb-2 shrink-0 text-sm text-danger">
               {recorder.error}
@@ -1785,11 +1777,47 @@ export default function RoomPage() {
                         <button type="button" onClick={() => endLive(true)} className="btn btn-primary">
                           {livePaused ? "Paused" : "Live"} · End and send
                         </button>
+                        {stage.available && (
+                    <button
+                      type="button"
+                      aria-pressed={cameraOn}
+                      disabled={!myTurn && broadcasting}
+                      onClick={async () => {
+                        const next = !cameraOn;
+                        setCameraOn(next);
+                        if (broadcasting) await stage.setCamera(next).catch(() => setError("Your camera could not start. Allow it in your browser settings."));
+                      }}
+                      title={cameraOn ? "Your camera is shown while you are live" : "Only your voice is sent"}
+                      className={`btn ${cameraOn ? "border-accent text-accent" : ""}`}
+                    >
+                      {cameraOn ? <VideoCamera aria-hidden="true" size={18} weight="fill" /> : <VideoCameraSlash aria-hidden="true" size={18} />}
+                      {cameraOn ? "Camera on" : "Camera off"}
+                    </button>
+                  )}
                       </>
                     ) : (
-                      <button type="button" onClick={goLive} disabled={!myTurn} className="btn">
-                        <Broadcast aria-hidden="true" size={18} /> Go live
-                      </button>
+                      <>
+                        <button type="button" onClick={goLive} disabled={!myTurn || (stage.available && !stage.connected)} className="btn">
+                          <Broadcast aria-hidden="true" size={18} /> {stage.available && myTurn && !stage.connected ? "Connecting…" : "Go live"}
+                        </button>
+                        {stage.available && (
+                    <button
+                      type="button"
+                      aria-pressed={cameraOn}
+                      disabled={!myTurn && broadcasting}
+                      onClick={async () => {
+                        const next = !cameraOn;
+                        setCameraOn(next);
+                        if (broadcasting) await stage.setCamera(next).catch(() => setError("Your camera could not start. Allow it in your browser settings."));
+                      }}
+                      title={cameraOn ? "Your camera is shown while you are live" : "Only your voice is sent"}
+                      className={`btn ${cameraOn ? "border-accent text-accent" : ""}`}
+                    >
+                      {cameraOn ? <VideoCamera aria-hidden="true" size={18} weight="fill" /> : <VideoCameraSlash aria-hidden="true" size={18} />}
+                      {cameraOn ? "Camera on" : "Camera off"}
+                    </button>
+                  )}
+                      </>
                     )
                   ) : speakMode === "own" ? (
                     <button

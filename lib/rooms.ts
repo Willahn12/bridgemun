@@ -110,8 +110,6 @@ export interface Room {
   endAt: string | null;
   /** Each delegation's speaking time, set when the forum starts. */
   limits: TurnLimits | null;
-  /** The forum's Zoom meeting, made when it starts if the server has Zoom keys. */
-  zoom: { meetingNumber: string; password: string } | null;
 }
 
 export interface RoomMember {
@@ -174,7 +172,6 @@ function toRoom(id: string, r: Record<string, unknown>): Room {
     lateJoin: r.late_join === true,
     endAt: (r.end_at as string | null) ?? null,
     limits: (r.limits as TurnLimits | null) ?? null,
-    zoom: (r.zoom as Room["zoom"]) ?? null,
   };
 }
 

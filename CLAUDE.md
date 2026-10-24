@@ -15,7 +15,7 @@ LognCoding summer 2026 capstone. A web app where middle schoolers research Model
 - `app/`: pages. `delegate` (AI practice), `research`, `studio` (Speech Studio), `room/[id]` (online rooms, a large file), `org/[id]/...` (organizations, classroom, assignments, chat), `history`, `report/[id]`, and the auth pages.
 - `app/api/`: `coach`, `delegate`, `report`, `research`, `tts`. These are server-side LLM/TTS calls that don't touch Firestore.
 - `lib/`: Firestore data access (`auth`, `orgs`, `classroom`, `rooms`, `sessions`), `firebase.ts` (init), `motions.ts` (pure motion/procedure logic), `voice.ts`, `tone.ts`.
-- Zoom: `lib/zoom.ts` (server) + `app/api/zoom/*` + `lib/zoomClient.ts` + `components/ZoomTile.tsx`, and the SDK runs isolated in `public/zoom-embed.html` (React 18 from Zoom's CDN; never `npm install @zoom/meetingsdk`, it pins React 18).
+- Live audio/video: LiveKit (`lib/useLiveStage.ts`, `app/api/livekit/token`, `lib/livekit.ts`, `lib/serverAuth.ts`); fallback without keys is direct WebRTC in `lib/liveAudio.ts`. Zoom was tried and removed (see ROADMAP item 5).
 - `components/delegate/`: the practice-session UI (`SessionView`, `MotionPanel`, `SetupForm`, `ReportView`, ...).
 
 ## Firestore
