@@ -1,0 +1,172 @@
+{
+  "id": "plastic-pollution",
+  "title": "A global, legally binding treaty to end plastic pollution",
+  "keywords": ["plastic", "plastics", "microplastic", "inc-5", "plastics treaty"],
+  "asOf": "2025-09",
+  "credit": "Compiled from William Ahn's Bridge MUN research assignment (10 October 2026) and the sources listed per country.",
+  "countries": {
+    "Rwanda": {
+      "aliases": [],
+      "stance": "support",
+      "attitude": "Strongly supportive (leader)",
+      "summary": "Wants a strong, binding treaty that cuts plastic production and covers the full life cycle. Co-chairs the High Ambition Coalition with Norway.",
+      "points": [
+        "Banned plastic bags in 2008 (Law No. 57/2008) and its economy kept growing, so production limits are possible.",
+        "Led production-cut proposals at Busan (INC-5); 42 African countries endorsed its production paper.",
+        "Pushes for a 2040 deadline and funding for African countries."
+      ],
+      "redLines": ["A waste-only treaty with no production limits"],
+      "allies": ["Norway", "Panama", "the EU", "the African Group", "small island states"],
+      "sources": [
+        { "title": "EIA: What does a High Ambition Coalition to End Plastic Pollution mean for the global plastics treaty?", "url": "https://eia-international.org/blog/what-does-a-high-ambition-coalition-to-end-plastic-pollution-mean-for-the-global-plastics-treaty/" },
+        { "title": "UNEP LEAP: Rwanda Law No. 57/2008 prohibiting plastic bags", "url": "https://leap.unep.org/countries/rw/national-legislation/law-no-572008-10092008-relating-prohibition-manufacturing" }
+      ]
+    },
+    "Norway": {
+      "aliases": [],
+      "stance": "support",
+      "attitude": "Strongly supportive (leader)",
+      "summary": "Wants common global rules that \"turn off the tap\" on plastic and end plastic pollution by 2040. Co-chairs the High Ambition Coalition.",
+      "points": [
+        "Recycling alone cannot keep up with rising production.",
+        "A long coastline and a seafood economy make ocean health an economic issue.",
+        "Offers to help fund action in developing countries."
+      ],
+      "redLines": ["Dropping production or full life cycle language"],
+      "allies": ["Rwanda", "the EU", "Switzerland", "Canada", "Panama"],
+      "sources": [
+        { "title": "EIA: High Ambition Coalition to End Plastic Pollution", "url": "https://eia-international.org/blog/what-does-a-high-ambition-coalition-to-end-plastic-pollution-mean-for-the-global-plastics-treaty/" }
+      ]
+    },
+    "Panama": {
+      "aliases": [],
+      "stance": "support",
+      "attitude": "Strongly supportive (outspoken)",
+      "summary": "Wants a global target to reduce plastic production written into the treaty. Co-led the bloc of 102 countries backing a production target at Busan.",
+      "points": [
+        "Its negotiator called the failed Busan summit a \"moral failure\".",
+        "Offers compromise wording: a production target with the exact number agreed later.",
+        "A small state on two oceans that sees ocean health as environmental and economic."
+      ],
+      "redLines": ["A treaty with no production target at all"],
+      "allies": ["Pacific small island states", "Rwanda", "Norway", "Latin American countries"],
+      "sources": [
+        { "title": "The Maritime Executive: What scuttled the global plastics treaty talks in Busan", "url": "https://maritime-executive.com/editorials/what-scuttled-the-global-plastics-treaty-talks-in-busan" }
+      ]
+    },
+    "Philippines": {
+      "aliases": [],
+      "stance": "support",
+      "attitude": "Supportive",
+      "summary": "Supports an ambitious treaty covering the full life cycle, with a global production cap. Signed the Nice wake up call in June 2025 with 94 other countries.",
+      "points": [
+        "A 2021 Science Advances study (Meijer et al.) ranked the Philippines the largest source of river plastic reaching the ocean, and Manila's Pasig River the most polluting river. These are model estimates.",
+        "Much of the waste is single-use sachet packaging, so it wants extended producer responsibility.",
+        "Asks for financial and technical help to build waste systems."
+      ],
+      "redLines": ["A treaty that puts the cost only on the countries suffering the pollution"],
+      "allies": ["Small island states", "Pacific nations", "Rwanda", "Panama"],
+      "sources": [
+        { "title": "Greenpeace Philippines: PH, 94 countries call for an ambitious Plastics Treaty (11 June 2025)", "url": "https://www.greenpeace.org/philippines/press/67940/greenpeace-welcomes-nice-declaration/" },
+        { "title": "GMA News: Philippines emits the most riverine plastic into the ocean, study finds (25 August 2022)", "url": "https://www.gmanetwork.com/news/scitech/science/842711/philippines-emits-the-most-number-of-riverine-plastic-into-the-ocean-study-finds/story" }
+      ]
+    },
+    "Kenya": {
+      "aliases": [],
+      "stance": "support",
+      "attitude": "Supportive but inconsistent",
+      "summary": "Generally backs an ambitious treaty and wants to host its secretariat in Nairobi, but joined the High Ambition Coalition late and did not sign the 2025 Nice wake up call.",
+      "points": [
+        "Its 2017 plastic bag ban is one of the strictest in the world.",
+        "Hosted UNEA-5.2, where the talks were launched, and INC-3.",
+        "Supports African Group positions on funding, but faces trade pressure."
+      ],
+      "redLines": ["Losing the treaty secretariat to another region"],
+      "allies": ["Rwanda", "the African Group"],
+      "sources": [
+        { "title": "People Daily: Kenya's green credentials queried in plastics debate (7 July 2025)", "url": "https://peopledaily.digital/news/kenyas-green-credentials-queried-in-plastics-debate" }
+      ]
+    },
+    "Japan": {
+      "aliases": [],
+      "stance": "neutral",
+      "attitude": "Cautious (bridge-builder)",
+      "summary": "Officially in the ambitious camp (joined the High Ambition Coalition in May 2023) but prefers practical compromise over strict production caps.",
+      "points": [
+        "Promotes technology, recycling and better waste collection.",
+        "Offers compromise text both sides can accept and avoids firm numbers.",
+        "A major producer and exporter of plastic that burns much of its waste for energy."
+      ],
+      "redLines": ["Hard production numbers that would hurt its chemical industry"],
+      "allies": ["Works with both blocs; close to the EU and South Korea"],
+      "sources": [
+        { "title": "Climate Home News: Japan joins anti-plastic coalition ahead of Paris treaty talks (26 May 2023)", "url": "https://climatechangenews.com/2023/05/26/japan-joins-anti-plastic-coalition-ahead-of-paris-treaty-talks-leaving-us-isolated/" }
+      ]
+    },
+    "China": {
+      "aliases": ["People's Republic of China"],
+      "stance": "oppose",
+      "attitude": "Cautious and guarded",
+      "summary": "Opposes binding production limits. Wants the treaty to focus on stopping plastic leaking into the environment, with flexible, step-by-step national action.",
+      "points": [
+        "The world's largest plastics producer and consumer.",
+        "Stresses common but differentiated responsibilities: lighter duties and funding for developing countries.",
+        "Speaks diplomatically and avoids looking like the main blocker."
+      ],
+      "redLines": ["Binding global caps on production"],
+      "allies": ["India", "the Like-Minded Group"],
+      "sources": [
+        { "title": "The Maritime Executive: What scuttled the global plastics treaty talks in Busan", "url": "https://maritime-executive.com/editorials/what-scuttled-the-global-plastics-treaty-talks-in-busan" }
+      ]
+    },
+    "India": {
+      "aliases": [],
+      "stance": "oppose",
+      "attitude": "Firmly opposed",
+      "summary": "Opposes any limits on primary (virgin) plastic production and accepts treaty rules on waste management only. Sided with the Like-Minded Countries in Geneva (August 2025).",
+      "points": [
+        "Argues that restricting primary plastic production would constrain economic growth and industrialisation (as summarised by Eco-Business).",
+        "Frames this as the right to develop, where millions still lack basic services.",
+        "The 2021 Science Advances study ranked India second for river plastic reaching the ocean."
+      ],
+      "redLines": ["Any cap on primary plastic production"],
+      "allies": ["China", "Saudi Arabia", "the Like-Minded Group"],
+      "sources": [
+        { "title": "Eco-Business: How India helped scuttle the global plastics treaty (3 September 2025, opinion)", "url": "https://www.eco-business.com/opinion/how-india-helped-scuttle-the-global-plastics-treaty/" }
+      ]
+    },
+    "United States": {
+      "aliases": ["United States of America", "USA", "US", "U.S."],
+      "stance": "oppose",
+      "attitude": "Strongly opposed (active blocker)",
+      "summary": "Rejects global production caps and bans on plastic additives; supports waste management, better product design and recycling. Urged countries before Geneva (memo of 25 July 2025) to reject production targets.",
+      "points": [
+        "\"Plastics play a critical role throughout every sector of every economy\" (State Department).",
+        "Proposed removing \"full life cycle\" language from the treaty's objective in Geneva.",
+        "Each country should act according to its national context; promotes innovation and recycling."
+      ],
+      "redLines": ["Production targets", "Global bans on plastic additives or products"],
+      "allies": ["Saudi Arabia and other Gulf states", "Russia"],
+      "sources": [
+        { "title": "AP via Bangor Daily News: US at plastics treaty talks (8 August 2025)", "url": "https://www.bangordailynews.com/2025/08/08/nation/us-at-plastics-treaty-talks-is-rare-international-participation-under-trump-whats-the-goal/" },
+        { "title": "Climate Home News: Plastics treaty talks collapse without a deal (15 August 2025)", "url": "https://climatechangenews.com/2025/08/15/plastics-treaty-talks-collapse-without-a-deal-after-chaotic-negotiations/" }
+      ]
+    },
+    "Saudi Arabia": {
+      "aliases": ["Kingdom of Saudi Arabia"],
+      "stance": "oppose",
+      "attitude": "Strongly opposed (leads the blockers)",
+      "summary": "Opposes any controls on plastic production and wants the treaty limited to waste and clean-up. Leads the Like-Minded Group formed at INC-3.",
+      "points": [
+        "\"If you address plastic pollution, there should be no problem with producing plastics\" (its delegate at Busan).",
+        "Petrochemicals are a key future market for its oil.",
+        "Insists on consensus decision-making and uses procedure to slow progress."
+      ],
+      "redLines": ["Production controls", "Voting instead of consensus"],
+      "allies": ["Russia", "Iran", "Kuwait", "the United States", "India"],
+      "sources": [
+        { "title": "The Maritime Executive: What scuttled the global plastics treaty talks in Busan", "url": "https://maritime-executive.com/editorials/what-scuttled-the-global-plastics-treaty-talks-in-busan" }
+      ]
+    }
+  }
+}

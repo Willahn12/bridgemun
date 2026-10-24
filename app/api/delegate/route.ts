@@ -32,6 +32,8 @@ interface Body {
   point?: { type: PointType; text: string };
   /** vote on a draft resolution: its title and operative clauses. */
   resolution?: { title: string; sponsor: string; clauses: string[] };
+  /** One position brief per AI delegation (lib/positions.ts briefLine), so each stays in character. */
+  positions: string[];
 }
 
 const short = (v: unknown, n: number) => typeof v === "string" && v.trim().length > 0 && v.length <= n;
@@ -75,6 +77,7 @@ function parse(v: unknown): Body | null {
     informal: b.informal === true,
     seconds: typeof b.seconds === "number" && b.seconds >= 15 && b.seconds <= 300 ? Math.round(b.seconds) : undefined,
     point: parsePoint(b.point),
+    positions: Array.isArray(b.positions) ? b.positions.filter((x): x is string => short(x, 1500)).slice(0, 30) : [],
     resolution: parseResolution(b.resolution),
   };
 }
@@ -169,7 +172,11 @@ Committee: ${b.committee}
 Agenda topic: ${b.topic}
 AI delegations you play: ${b.aiCountries.map((c) => `"${c}"`).join(", ")}
 Human delegate represents: ${b.humanCountry}
-
+${
+    b.positions.length
+      ? `\nPosition briefs. Each AI delegation must stay consistent with its own brief: it may adapt its tactics, answer new arguments and concede genuinely reasonable points, but it never contradicts its stance or crosses its red lines, and its votes follow the brief.\n${b.positions.map((p) => `- ${p}`).join("\n")}\n`
+      : ""
+  }
 ${task(b)}
 ${shape}${judgeRules}${caucusRules}
 Speech rules:

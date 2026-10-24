@@ -8,6 +8,8 @@ import { defaultVoice, PERSON_VOICES, rememberedVoice, rememberVoice } from "@/l
 import { toneStyle } from "@/lib/tone";
 import LiveVideo from "@/components/LiveVideo";
 import NotesPanel from "@/components/NotesPanel";
+import PositionsPanel from "@/components/PositionsPanel";
+import { briefLine, type Position } from "@/lib/positions";
 import { useLiveStage } from "@/lib/useLiveStage";
 import { broadcast, listen, type Broadcast as LiveLink } from "@/lib/liveAudio";
 import { useAuth, displayName } from "@/lib/auth";
@@ -334,6 +336,7 @@ export default function RoomPage() {
               seconds: limitFor(r, directive === "opening" || directive === "open" ? "opening" : directive === "closing" ? "closing" : "debate"),
               order: order ?? [],
               only,
+              positions: r.positions.map(briefLine),
             }),
           });
           const got = await res.json();
@@ -607,6 +610,7 @@ export default function RoomPage() {
               judge: r.judge,
               order: [],
               motion: voting.question,
+              positions: r.positions.map(briefLine),
             }),
           })
             .then((res) => (res.ok ? res.json() : null))
@@ -646,9 +650,21 @@ export default function RoomPage() {
       // The time is shared between every delegation, counting open seats too when people may still join.
       const open = r.lateJoin && r.seats ? r.seats.filter((s) => !s.ai && !order.some((o) => o.name === s.country)).length : 0;
       const limits = endsAt ? splitTime((Date.parse(endsAt) - Date.now()) / 1000, order.length + open, DEBATE_ROUNDS) : DEFAULT_LIMITS;
+      // Where each AI delegation stands, so their speeches and votes stay true to their country.
+      const aiNames = [...new Set([...ais.map((a) => a.name), ...(r.seats ?? []).filter((s) => s.ai).map((s) => s.country)])];
+      const positions: Position[] = aiNames.length
+        ? await fetch("/api/positions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ committee: r.committee, topic: agenda(r), countries: aiNames }),
+          })
+            .then((res) => (res.ok ? res.json() : { positions: [] }))
+            .then((b: { positions?: Position[] }) => b.positions ?? [])
+            .catch(() => [])
+        : [];
       await patchRoom(
-        { status: "live", phase: "opening", turn_order: order, cursor: 0, turn_user: null, turn_deadline: null, live_at: liveAt, ends_at: endsAt, limits },
-        { status: "live", phase: "opening", turnOrder: order, cursor: 0, turnUser: null, turnDeadline: null, liveAt, endsAt, limits },
+        { status: "live", phase: "opening", turn_order: order, cursor: 0, turn_user: null, turn_deadline: null, live_at: liveAt, ends_at: endsAt, limits, positions },
+        { status: "live", phase: "opening", turnOrder: order, cursor: 0, turnUser: null, turnDeadline: null, liveAt, endsAt, limits, positions },
       );
       if (r.judge) await runAi("open", undefined, order.map((o) => o.name));
       drive("opening", 0);
@@ -1602,6 +1618,7 @@ export default function RoomPage() {
             </ul>
           </section>
           )}
+          {live && <PositionsPanel positions={room.positions} />}
           {me && (
             <NotesPanel
               roomId={room.id}

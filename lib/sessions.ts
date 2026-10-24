@@ -6,6 +6,7 @@ import { currentUser, subscribeAuth } from "@/lib/auth";
 import { db } from "@/lib/firebase";
 import type { Procedure } from "@/lib/motions";
 import type { PointType } from "@/lib/points";
+import type { Position } from "@/lib/positions";
 
 export type Mode = "solo" | "committee" | "table";
 
@@ -73,6 +74,8 @@ export interface Session {
   cursor?: number;
   /** Motion system state: debate limit, extensions, a moderated caucus in progress, AI motion counters. */
   procedure?: Procedure;
+  /** Where each AI delegation stands, fetched when the session starts (lib/positions.ts). */
+  positions?: Position[];
   /** Where it came from. Online rooms keep a copy of the session in each member's account. */
   source?: "practice" | "room";
   /** Set once a session is shared with an organization (handed in as an assignment). */

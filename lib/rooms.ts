@@ -19,6 +19,7 @@ import { currentUser } from "@/lib/auth";
 import { myDisplayName } from "@/lib/orgs";
 import { db } from "@/lib/firebase";
 import type { Report } from "@/lib/sessions";
+import type { Position } from "@/lib/positions";
 
 export type RoomStatus = "lobby" | "live" | "ended";
 export type RoomPhase = "lobby" | "opening" | "debate" | "closing";
@@ -114,6 +115,8 @@ export interface Room {
   endAt: string | null;
   /** Each delegation's speaking time, set when the forum starts. */
   limits: TurnLimits | null;
+  /** Where each AI delegation stands, fetched by the host when the forum starts (lib/positions.ts). */
+  positions: Position[];
 }
 
 export interface RoomMember {
@@ -178,6 +181,7 @@ function toRoom(id: string, r: Record<string, unknown>): Room {
     lateJoin: r.late_join === true,
     endAt: (r.end_at as string | null) ?? null,
     limits: (r.limits as TurnLimits | null) ?? null,
+    positions: Array.isArray(r.positions) ? (r.positions as Position[]) : [],
   };
 }
 

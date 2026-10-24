@@ -10,6 +10,8 @@ import MotionPanel, { type Ballot, type Draft } from "@/components/delegate/Moti
 import PointPanel from "@/components/delegate/PointPanel";
 import { ResolutionBallot, ResolutionDraft } from "@/components/delegate/ResolutionPanel";
 import { pointLine, type PointType } from "@/lib/points";
+import { briefLine, type Position } from "@/lib/positions";
+import PositionsPanel from "@/components/PositionsPanel";
 import {
   AI_MOTION_TYPES,
   afterSpeaking,
@@ -114,6 +116,8 @@ export default function SessionView({
   const ballotRef = useRef<((b: Ballot) => void) | null>(null);
   const [aiNote, setAiNote] = useState<string | null>(null);
   const [pointOpen, setPointOpen] = useState(false);
+  const [positions, setPositionsState] = useState<Position[]>(initial.positions ?? []);
+  const positionsRef = useRef<Position[]>(initial.positions ?? []);
   const [draftOpen, setDraftOpen] = useState(false);
   const [resBallot, setResBallot] = useState(false);
   const resBallotRef = useRef<((b: Ballot) => void) | null>(null);
@@ -139,8 +143,8 @@ export default function SessionView({
   }, []);
 
   useEffect(() => {
-    if (save) saveSession({ ...initial, lines, phase, report, endedAt, cursor, procedure });
-  }, [save, initial, lines, phase, report, endedAt, cursor, procedure]);
+    if (save) saveSession({ ...initial, lines, phase, report, endedAt, cursor, procedure, positions });
+  }, [save, initial, lines, phase, report, endedAt, cursor, procedure, positions]);
 
   useEffect(() => {
     if (phase === "ended") window.scrollTo({ top: 0, behavior: reduceMotion() ? "auto" : "smooth" });
@@ -223,6 +227,7 @@ export default function SessionView({
           only,
           caucus: caucus ? { topic: caucus.topic, speakingTime: caucus.speakingTime } : undefined,
           informal: unmodRef.current !== null,
+          positions: positionsRef.current.map(briefLine),
           ...extra,
         }),
       });
@@ -391,7 +396,29 @@ export default function SessionView({
   );
 
   /* The judge opens the session and draws who goes first. */
+  /* Where each AI delegation stands, fetched once so their speeches and votes stay true to their country. */
+  async function loadPositions() {
+    if (positionsRef.current.length || !aiCountries.length) return;
+    try {
+      const res = await fetch("/api/positions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ committee: initial.committee, topic: initial.topic, countries: aiCountries }),
+      });
+      const body = (await res.json()) as { positions?: Position[] };
+      if (res.ok && body.positions?.length) {
+        positionsRef.current = body.positions;
+        setPositionsState(body.positions);
+      }
+    } catch {
+      // The delegates still speak from general knowledge.
+    }
+  }
+
   async function startSession() {
+    setThinking(true);
+    await loadPositions();
+    setThinking(false);
     const ok = await aiTurn("open");
     if (!ok) return;
     if (mode === "table") {
@@ -969,6 +996,7 @@ export default function SessionView({
           Speaking order, drawn by the judge: {order.map(nameOf).join(", ")}
         </p>
       )}
+      {!ended && <PositionsPanel positions={positions} className="mt-2 shrink-0 print:hidden" />}
       <div className="pb-2" />
 
       <div
