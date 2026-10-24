@@ -133,7 +133,8 @@ export interface RoomLine {
   id: string;
   userId: string | null;
   speaker: string;
-  kind: "human" | "ai" | "chair";
+  /** "point": a point, motion or draft resolution a delegate raised, posted by the host when the chair takes it. */
+  kind: "human" | "ai" | "chair" | "point";
   text: string;
   createdAt: string;
   /** Storage path of a voice recording, if the speaker recorded one. */
@@ -620,4 +621,76 @@ export async function clipUrl(path: string): Promise<string> {
   if (!snap.exists()) throw new Error("That recording is no longer available.");
   const r = snap.data();
   return `data:${r.mime as string};base64,${r.data as string}`;
+}
+
+/* ---------- Rules of procedure in a live forum ----------
+   A delegate raises a point, moves a motion or introduces a draft resolution by adding a request. The host's
+   tab takes pending requests between speeches: the judge rules on points, motions go to a vote, and draft
+   resolutions are voted on after closing statements. */
+
+export type RequestKind = "point" | "motion" | "resolution";
+export type MotionKind = "close" | "extend";
+
+export interface RoomRequest {
+  id: string;
+  userId: string;
+  /** The delegation that raised it (their country). */
+  from: string;
+  kind: RequestKind;
+  /** point: "information" | "order" | "inquiry". motion: MotionKind. */
+  type: string;
+  text: string;
+  /** Point of information: the delegation the question is for. */
+  to: string | null;
+  title: string | null;
+  clauses: string[];
+  /** "pending" until the chair takes it; resolutions then stay "introduced" until voted on. */
+  status: "pending" | "introduced" | "done";
+  at: number;
+}
+
+const toRequest = (id: string, r: Record<string, unknown>): RoomRequest => ({
+  id,
+  userId: r.user_id as string,
+  from: r.from as string,
+  kind: r.kind as RequestKind,
+  type: (r.type as string) ?? "",
+  text: (r.text as string) ?? "",
+  to: (r.to as string | null) ?? null,
+  title: (r.title as string | null) ?? null,
+  clauses: Array.isArray(r.clauses) ? (r.clauses as string[]) : [],
+  status: (r.status as RoomRequest["status"]) ?? "pending",
+  at: (r.at as Timestamp | undefined)?.toMillis?.() ?? Date.now(),
+});
+
+export async function raiseRequest(
+  roomId: string,
+  from: string,
+  req: { kind: RequestKind; type?: string; text?: string; to?: string | null; title?: string; clauses?: string[] },
+) {
+  const uid = currentUser()?.id;
+  if (!uid) throw new Error("Sign in first.");
+  await addDoc(collection(db(), "rooms", roomId, "requests"), {
+    user_id: uid,
+    from: from.slice(0, 100),
+    kind: req.kind,
+    type: req.type ?? "",
+    text: (req.text ?? "").slice(0, 400),
+    to: req.to ?? null,
+    title: req.title ? req.title.slice(0, 150) : null,
+    clauses: (req.clauses ?? []).slice(0, 8).map((c) => c.slice(0, 400)),
+    status: "pending",
+    at: Timestamp.now(),
+  });
+}
+
+/** Every request in the room, kept up to date. */
+export function watchRequests(roomId: string, onChange: (all: RoomRequest[]) => void) {
+  return onSnapshot(collection(db(), "rooms", roomId, "requests"), (snap) =>
+    onChange(snap.docs.map((d) => toRequest(d.id, d.data())).sort((a, b) => a.at - b.at)),
+  );
+}
+
+export async function setRequestStatus(roomId: string, requestId: string, status: RoomRequest["status"]) {
+  await updateDoc(doc(db(), "rooms", roomId, "requests", requestId), { status });
 }

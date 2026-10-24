@@ -12,6 +12,7 @@ const LINKS = [
   { href: "/history", short: "History", long: "Past chats" },
   { href: "/studio", short: "Studio", long: "Speech Studio" },
   { href: "/org", short: "Org", long: "Organization" },
+  { href: "/friends", short: "Friends", long: "Friends" },
 ];
 
 /* The signed-in person: their name where Sign in and Register were, with a small menu. */

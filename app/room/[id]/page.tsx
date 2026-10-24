@@ -10,6 +10,9 @@ import LiveVideo from "@/components/LiveVideo";
 import NotesPanel from "@/components/NotesPanel";
 import PositionsPanel from "@/components/PositionsPanel";
 import { briefLine, type Position } from "@/lib/positions";
+import { POINT_TYPES, pointLine, type PointType } from "@/lib/points";
+import PointPanel from "@/components/delegate/PointPanel";
+import { ResolutionDraft } from "@/components/delegate/ResolutionPanel";
 import { useLiveStage } from "@/lib/useLiveStage";
 import { broadcast, listen, type Broadcast as LiveLink } from "@/lib/liveAudio";
 import { useAuth, displayName } from "@/lib/auth";
@@ -34,7 +37,11 @@ import {
   listRoomLines,
   listRoomMembers,
   postLine,
+  raiseRequest,
   setMyVoice,
+  setRequestStatus,
+  watchRequests,
+  type RoomRequest,
   updateRoom,
   uploadClip,
   watchRoom,
@@ -68,6 +75,8 @@ const PHASE_LABEL: Record<string, string> = {
 type Stage = "opening" | "debate" | "closing";
 
 const YIELD_TEXT = "Yields the floor.";
+/* A line as the AI and the report see it: a point a delegate raised counts as that delegate's words. */
+const apiLine = (l: RoomLine) => ({ speaker: l.speaker, kind: l.kind === "point" ? ("human" as const) : l.kind, text: l.text });
 
 /* How the room hears a person: their AI voice reading their words, a recording of their voice, or their voice live. */
 type SpeakMode = "ai" | "own" | "live";
@@ -161,6 +170,13 @@ export default function RoomPage() {
   const wasLiveRef = useRef(false);
   const savedCopyRef = useRef(false);
   const finishingRef = useRef(false);
+  // Rules of procedure: every request in the room, and what passed motions changed.
+  const [requests, setRequests] = useState<RoomRequest[]>([]);
+  const requestsRef = useRef<RoomRequest[]>([]);
+  const closeDebateRef = useRef(false);
+  const extraRoundsRef = useRef(0);
+  const [procOpen, setProcOpen] = useState<null | "point" | "motion" | "resolution">(null);
+  const [procBusy, setProcBusy] = useState(false);
   const autoStartRef = useRef(false);
   const startingRef = useRef(false);
   /* Host only, during a live forum: puts people who joined late at the end of the speaking order. */
@@ -183,6 +199,36 @@ export default function RoomPage() {
 
   const isHost = !!room && room.hostId === userId;
   const me = members.find((m) => m.userId === userId);
+  const isMember = !!me;
+  const myPending = requests.filter((q) => q.userId === userId && q.status === "pending");
+  const myResolution = requests.find((q) => q.userId === userId && q.kind === "resolution");
+
+  async function submitRequest(req: Parameters<typeof raiseRequest>[2]) {
+    const r = roomRef.current;
+    if (!r || !me) return;
+    setProcBusy(true);
+    setError(null);
+    try {
+      await raiseRequest(r.id, me.country || me.name, req);
+      setProcOpen(null);
+    } catch (e) {
+      setError(friendlyRoomError(e instanceof Error ? e.message : "Could not raise that."));
+    } finally {
+      setProcBusy(false);
+    }
+  }
+
+  /* Points, motions and draft resolutions raised in this forum. Members only (the rules let only them read). */
+  useEffect(() => {
+    if (!isMember) return;
+    return watchRequests(id, (all) => {
+      // Keep what this tab already took, so the host never takes a request twice while Firestore catches up.
+      const taken = new Map(requestsRef.current.filter((q) => q.status !== "pending").map((q) => [q.id, q.status]));
+      const merged = all.map((q) => (q.status === "pending" && taken.has(q.id) ? { ...q, status: taken.get(q.id)! } : q));
+      requestsRef.current = merged;
+      setRequests(merged);
+    });
+  }, [id, isMember]);
   const myLabel = me?.country || (user ? displayName(user) : "You");
   const myTurn = !!room && room.status === "live" && !!userId && room.turnUser === userId;
   /* Live audio and video through LiveKit when the server has keys; otherwise direct browser-to-browser audio. */
@@ -271,7 +317,7 @@ export default function RoomPage() {
   }, []);
 
   const post = useCallback(
-    async (kind: "ai" | "chair", speakerName: string, text: string, refId?: string) => {
+    async (kind: "ai" | "chair" | "point", speakerName: string, text: string, refId?: string) => {
       const r = roomRef.current;
       if (!r) return;
       receive(await postLine(r.id, null, speakerName, kind, text, { refId }));
@@ -309,7 +355,7 @@ export default function RoomPage() {
 
   /* Asks the server for the AI's words. Returns false if it still failed after retries. */
   const runAi = useCallback(
-    async (directive: "open" | "reply" | "adjourn" | "opening" | "closing", only?: string, order?: string[]) => {
+    async (directive: "open" | "reply" | "adjourn" | "opening" | "closing" | "point", only?: string, order?: string[], extra?: Record<string, unknown>) => {
       const r = roomRef.current;
       if (!r) return true;
       setAiBusy(true);
@@ -330,13 +376,14 @@ export default function RoomPage() {
               topic: agenda(r),
               humanCountry: humans.join(", ").slice(0, 95),
               aiCountries: activeAi(r),
-              lines: linesRef.current.slice(-150).map((l) => ({ speaker: l.speaker, kind: l.kind, text: l.text })),
+              lines: linesRef.current.slice(-150).map(apiLine),
               directive,
               judge: r.judge,
               seconds: limitFor(r, directive === "opening" || directive === "open" ? "opening" : directive === "closing" ? "closing" : "debate"),
               order: order ?? [],
               only,
               positions: r.positions.map(briefLine),
+              ...extra,
             }),
           });
           const got = await res.json();
@@ -423,10 +470,10 @@ export default function RoomPage() {
   );
 
   /* Counts the ballots, announces the result and closes the vote. */
-  const closeVote = useCallback(async () => {
+  const closeVote = useCallback(async (noun: "motion" | "draft resolution" = "motion") => {
     const r = roomRef.current;
     const v = r?.voting;
-    if (!r || !v || v.status !== "open") return;
+    if (!r || !v || v.status !== "open") return null;
     setVoteBusy(true);
     try {
       const all = await listBallots(r.id, v.id);
@@ -434,12 +481,24 @@ export default function RoomPage() {
       const [yes, no, abstain] = [n("for"), n("against"), n("abstain")];
       const closed: Voting = { ...v, status: "closed" };
       await patchRoom({ voting: closed }, { voting: closed });
-      const outcome = yes > no ? "The motion passes." : yes === no && yes > 0 ? "The vote is tied, so the motion fails." : "The motion fails.";
+      const passed = yes > no;
+      const outcome =
+        noun === "draft resolution"
+          ? passed
+            ? "The draft resolution is adopted."
+            : "The draft resolution is not adopted."
+          : passed
+            ? "The motion passes."
+            : yes === no && yes > 0
+              ? "The vote is tied, so the motion fails."
+              : "The motion fails.";
       await announce(
         `Voting is closed on: ${v.question}. ${yes} for, ${no} against, ${abstain} ${abstain === 1 ? "abstention" : "abstentions"}. ${outcome}`,
       );
+      return { yes, no, abstain, passed };
     } catch (e) {
       setError(friendlyRoomError(e instanceof Error ? e.message : "Could not close the vote."));
+      return null;
     } finally {
       setVoteBusy(false);
     }
@@ -466,7 +525,7 @@ export default function RoomPage() {
           topic: agenda(r),
           humanCountry: "",
           aiCountries: r.aiCountries,
-          lines: linesRef.current.slice(-300).map((l) => ({ speaker: l.speaker, kind: l.kind, text: l.text })),
+          lines: linesRef.current.slice(-300).map(apiLine),
         }),
       });
       const body = await res.json();
@@ -483,6 +542,131 @@ export default function RoomPage() {
       setEnding(false);
     }
   }, [stopSpeech, patchRoom, runAi, closeVote]);
+
+  /* ----- Rules of procedure: points, motions and draft resolutions raised by delegates ----- */
+
+  /* The chair speaks: the judge if there is one, otherwise the host as moderator. */
+  const rule = useCallback(
+    async (text: string) => {
+      const r = roomRef.current;
+      if (r) await post("chair", r.judge ? "Judge" : "Moderator", text);
+    },
+    [post],
+  );
+
+  /* A vote the forum runs by itself: the AI delegations vote at once, people have 40 seconds. */
+  const autoVote = useCallback(
+    async (question: string, aiExtra: Record<string, unknown>, noun: "motion" | "draft resolution") => {
+      const r = roomRef.current;
+      if (!r) return null;
+      if (r.voting?.status === "open") await closeVote();
+      const voting: Voting = { id: Math.random().toString(36).slice(2, 10), question: question.slice(0, 300), status: "open" };
+      await patchRoom({ voting }, { voting });
+      const ai = activeAi(r);
+      const aiVotes = ai.length
+        ? fetch("/api/delegate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              mode: ai.length > 1 ? "committee" : "table",
+              committee: r.committee,
+              topic: agenda(r),
+              humanCountry: "",
+              aiCountries: ai,
+              lines: linesRef.current.slice(-150).map(apiLine),
+              directive: "vote",
+              judge: r.judge,
+              order: [],
+              positions: r.positions.map(briefLine),
+              ...aiExtra,
+            }),
+          })
+            .then((res) => (res.ok ? res.json() : null))
+            .then((body: { votes?: { country: string; vote: Ballot["vote"]; reason: string }[] } | null) =>
+              body?.votes?.length ? castAiBallots(r.id, voting.id, body.votes) : undefined,
+            )
+            .catch(() => undefined)
+        : Promise.resolve();
+      await rule(`The floor is open for voting on: ${voting.question}. Delegates, cast your ballot: for, against or abstain.`);
+      await aiVotes;
+      const people = membersRef.current.filter((m) => !m.moderator).length;
+      for (let waited = 0; waited < 40000; waited += 2000) {
+        const ballots = await listBallots(r.id, voting.id);
+        if (ballots.filter((b) => b.userId).length >= people) break;
+        await sleep(2000);
+      }
+      return closeVote(noun);
+    },
+    [closeVote, patchRoom, rule],
+  );
+
+  /* Takes every pending request, oldest first. Runs between speeches, so nobody is cut off mid-turn. */
+  const handleRequests = useCallback(async () => {
+    for (;;) {
+      const r = roomRef.current;
+      if (!r || r.status !== "live") return;
+      const q = requestsRef.current.find((x) => x.status === "pending");
+      if (!q) return;
+      const status = q.kind === "resolution" ? "introduced" : "done";
+      requestsRef.current = requestsRef.current.map((x) => (x.id === q.id ? { ...x, status } : x));
+      await setRequestStatus(r.id, q.id, status);
+
+      if (q.kind === "point" && POINT_TYPES.includes(q.type as PointType)) {
+        const type = q.type as PointType;
+        await post("point", q.from, pointLine(type, q.text, q.to ?? undefined));
+        if (type === "information" && q.to) {
+          if (activeAi(r).includes(q.to)) {
+            await rule(`The delegate of ${q.to} may respond to the point of information.`);
+            await runAi("point", q.to, undefined, { point: { type, text: q.text } });
+          } else {
+            await rule(`The delegate of ${q.to} may answer the point of information in their next speech.`);
+          }
+        } else if (r.judge) {
+          await runAi("point", undefined, undefined, { point: { type, text: q.text } });
+        } else {
+          await rule("The moderator notes the point.");
+        }
+      } else if (q.kind === "motion") {
+        const close = q.type === "close";
+        await post("point", q.from, close ? "Motion to close debate." : "Motion to extend debate by one more round.");
+        const wrong =
+          r.phase !== "debate"
+            ? "motions to close or extend debate are only taken during debate"
+            : !close && r.endsAt
+              ? "this forum has a set end time, so debate cannot be extended"
+              : close && closeDebateRef.current
+                ? "debate is already closing"
+                : null;
+        if (wrong) {
+          await rule(`The motion is out of order: ${wrong}.`);
+          continue;
+        }
+        const result = await autoVote(close ? `Motion to close debate (moved by ${q.from})` : `Motion to extend debate by one round (moved by ${q.from})`, {
+          motion: close ? `close debate (moved by ${q.from})` : `extend debate by one more round (moved by ${q.from})`,
+        }, "motion");
+        if (result?.passed) {
+          if (close) closeDebateRef.current = true;
+          else extraRoundsRef.current += 1;
+          await rule(close ? "Debate will close after the current speaker. Closing statements follow." : "Debate is extended by one more round.");
+        }
+      } else if (q.kind === "resolution" && q.title) {
+        await post("point", q.from, `Introduces the draft resolution "${q.title}": ${q.clauses.map((c, i) => `${i + 1}. ${c}`).join(" ")}`);
+        await rule(`The chair thanks the delegate of ${q.from}. The draft resolution "${q.title}" will be put to a vote after closing statements.`);
+      }
+    }
+  }, [post, rule, runAi, autoVote]);
+
+  /* After closing statements: each draft resolution goes to a vote. */
+  const voteOnResolutions = useCallback(async () => {
+    for (const q of requestsRef.current.filter((x) => x.kind === "resolution" && x.status === "introduced" && x.title)) {
+      const r = roomRef.current;
+      if (!r || r.status !== "live") return;
+      requestsRef.current = requestsRef.current.map((x) => (x.id === q.id ? { ...x, status: "done" } : x));
+      await setRequestStatus(r.id, q.id, "done");
+      await rule(`The committee moves into voting procedure on the draft resolution "${q.title}", sponsored by ${q.from}.`);
+      await autoVote(`Draft resolution "${q.title}" (sponsored by ${q.from})`, { resolution: { title: q.title, sponsor: q.from, clauses: q.clauses } }, "draft resolution");
+    }
+  }, [rule, autoVote]);
 
   /* Opening statements, debate, closing statements, adjourn. Resumes from a saved position.
      A forum with a length debates in rounds until it is time for closing statements, and stops when time
@@ -514,7 +698,10 @@ export default function RoomPage() {
           let i = si === first ? startCursor : 0;
           const more = () => {
             if (timeLeft() <= 0 || !active()) return false;
-            if (stage === "debate") return timed() ? timeLeft() > reserve() : i < len() * DEBATE_ROUNDS;
+            if (stage === "debate") {
+              if (closeDebateRef.current) return false; // a motion to close debate passed
+              return timed() ? timeLeft() > reserve() : i < len() * (DEBATE_ROUNDS + extraRoundsRef.current);
+            }
             return i < len();
           };
           if (i === 0 && stage === "debate" && more()) {
@@ -530,6 +717,9 @@ export default function RoomPage() {
           let idle = 0; // turns in a row with no one to speak; a whole lap of them ends the stage
           while (more() && idle < len()) {
             if (flowTokenRef.current !== token) return;
+            await handleRequests();
+            if (flowTokenRef.current !== token) return;
+            if (!more()) break;
             idle = (await doTurn(stage, i)) ? 0 : idle + 1;
             i++;
           }
@@ -538,6 +728,10 @@ export default function RoomPage() {
             break;
           }
         }
+        if (flowTokenRef.current === token) {
+          await handleRequests();
+          await voteOnResolutions();
+        }
         if (flowTokenRef.current === token) await finishSession();
       } catch (e) {
         setError(friendlyRoomError(e instanceof Error ? e.message : "The session hit a problem."));
@@ -545,7 +739,7 @@ export default function RoomPage() {
         if (flowTokenRef.current === token) flowRunRef.current = false;
       }
     },
-    [doTurn, finishSession, say],
+    [doTurn, finishSession, say, handleRequests, voteOnResolutions],
   );
 
   /* Host only: turns a country's seat over to the AI or back. Mid-session, a new AI seat joins the end of the
@@ -605,7 +799,7 @@ export default function RoomPage() {
               topic: agenda(r),
               humanCountry: "",
               aiCountries: ai,
-              lines: linesRef.current.slice(-150).map((l) => ({ speaker: l.speaker, kind: l.kind, text: l.text })),
+              lines: linesRef.current.slice(-150).map(apiLine),
               directive: "vote",
               judge: r.judge,
               order: [],
@@ -816,7 +1010,7 @@ export default function RoomPage() {
       topic: room.topic,
       humanCountry: mine?.country ?? "",
       aiCountries: room.aiCountries,
-      lines: linesRef.current.map((l) => ({ id: l.id, speaker: l.speaker, kind: l.kind, text: l.text })),
+      lines: linesRef.current.map((l) => ({ id: l.id, ...apiLine(l) })),
       updatedAt: Date.now(),
       phase: "ended",
       report: room.report,
@@ -1062,6 +1256,19 @@ export default function RoomPage() {
   const clock = secondsLeft === null ? "" : `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, "0")}`;
   const stageWord = room.phase === "opening" ? "opening statement" : room.phase === "closing" ? "closing statement" : "turn in the debate";
   const live = room.status === "live";
+  // The speakers' list as delegates see it: the next three in the speaking order who are still in the room.
+  const upNext = (() => {
+    if (!live || !room.turnOrder.length || room.phase === "lobby") return [] as string[];
+    const n = room.turnOrder.length;
+    const rounds = room.phase === "debate" ? Infinity : n;
+    const out: string[] = [];
+    for (let k = 1; k <= n && out.length < 3 && room.cursor + k < (rounds === Infinity ? room.cursor + n + 1 : rounds); k++) {
+      const t = room.turnOrder[(room.cursor + k) % n];
+      if (!t.off && (t.kind === "ai" || members.some((m) => m.userId === t.userId))) out.push(t.name);
+    }
+    return out;
+  })();
+  const otherDelegations = room.turnOrder.filter((t) => !t.off && t.name !== me?.country).map((t) => t.name);
   const lowTime = secondsLeft !== null && secondsLeft <= 10;
   const sessionLeft = live && room.endsAt ? Date.parse(room.endsAt) - now : null;
   const startsIn = room.status === "lobby" && room.startsAt ? Date.parse(room.startsAt) - now : null;
@@ -1464,7 +1671,7 @@ export default function RoomPage() {
                       </div>
                     )}
                     {isHost && (
-                      <button type="button" className="btn mt-3 w-full" disabled={voteBusy} onClick={closeVote}>
+                      <button type="button" className="btn mt-3 w-full" disabled={voteBusy} onClick={() => closeVote()}>
                         {voteBusy ? "Please wait…" : "Close voting and announce the result"}
                       </button>
                     )}
@@ -1879,6 +2086,82 @@ export default function RoomPage() {
               </div>
             </div>
           )}
+          {live && (
+            <div className="shrink-0 border-t border-line pt-3 text-sm">
+              {upNext.length > 0 && (
+                <p className="text-muted">
+                  <span className="font-semibold text-ink">Up next:</span> {upNext.join(", ")}
+                </p>
+              )}
+              {!me?.moderator && me && (
+                <>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-bold uppercase tracking-wider text-muted">Procedure</span>
+                    {(
+                      [
+                        ["point", "Raise a point"],
+                        ["motion", "Move a motion"],
+                        ["resolution", "Draft resolution"],
+                      ] as const
+                    ).map(([k, label]) => (
+                      <button
+                        key={k}
+                        type="button"
+                        aria-pressed={procOpen === k}
+                        className={`btn ${procOpen === k ? "border-accent" : ""}`}
+                        disabled={k === "resolution" && !!myResolution}
+                        title={k === "resolution" && myResolution ? "You have already introduced a draft resolution" : undefined}
+                        onClick={() => setProcOpen(procOpen === k ? null : k)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {myPending.length > 0 && (
+                    <p className="mt-2 text-muted" role="status">
+                      Waiting for the chair: {myPending.map((q) => (q.kind === "point" ? "your point" : q.kind === "motion" ? "your motion" : "your draft resolution")).join(", ")}. The chair takes them between speeches.
+                    </p>
+                  )}
+                  {procOpen === "point" && (
+                    <div className="mt-3 max-h-[45dvh] overflow-y-auto">
+                      <PointPanel delegations={otherDelegations} busy={procBusy} onRaise={(type, text, to) => submitRequest({ kind: "point", type, text, to: to ?? null })} onCancel={() => setProcOpen(null)} />
+                    </div>
+                  )}
+                  {procOpen === "motion" && (
+                    <section aria-label="Move a motion" className="mt-3 rounded-[var(--radius-ui)] border border-line bg-surface p-4">
+                      <p className="font-semibold">Move a motion</p>
+                      <p className="mt-1 text-muted">The committee votes on it straight away. The AI delegations vote too.</p>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        <button type="button" className="btn justify-start text-left" disabled={procBusy || room.phase !== "debate"} onClick={() => submitRequest({ kind: "motion", type: "close" })}>
+                          <span>
+                            <span className="block font-semibold">Close debate</span>
+                            <span className="block text-xs text-muted">Move straight to closing statements.</span>
+                          </span>
+                        </button>
+                        <button type="button" className="btn justify-start text-left" disabled={procBusy || room.phase !== "debate" || !!room.endsAt} onClick={() => submitRequest({ kind: "motion", type: "extend" })}>
+                          <span>
+                            <span className="block font-semibold">Extend debate</span>
+                            <span className="block text-xs text-muted">{room.endsAt ? "Not in forums with a set end time." : "One more round of speeches."}</span>
+                          </span>
+                        </button>
+                      </div>
+                      {room.phase !== "debate" && <p className="mt-2 text-xs text-muted">Motions are taken during debate.</p>}
+                    </section>
+                  )}
+                  {procOpen === "resolution" && !myResolution && (
+                    <div className="mt-3 max-h-[45dvh] overflow-y-auto">
+                      <ResolutionDraft
+                        sponsor={me.country || myLabel}
+                        busy={procBusy}
+                        onIntroduce={(title, clauses) => submitRequest({ kind: "resolution", title, clauses })}
+                        onCancel={() => setProcOpen(null)}
+                      />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -1983,7 +2266,11 @@ function Transcript({ lines, userId }: { lines: RoomLine[]; userId: string | und
             </p>
             <div
               className={`break-words rounded-[var(--radius-ui)] border p-3 text-sm leading-relaxed ${
-                l.kind === "human" && l.userId === userId ? "border-transparent bg-accent text-accent-ink" : "border-line bg-background"
+                l.kind === "human" && l.userId === userId
+                  ? "border-transparent bg-accent text-accent-ink"
+                  : l.kind === "point"
+                    ? "border-dashed border-accent bg-background"
+                    : "border-line bg-background"
               }`}
             >
               {l.text}
