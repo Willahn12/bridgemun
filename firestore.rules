@@ -193,5 +193,31 @@ service cloud.firestore {
         );
       }
     }
+
+    // ---------- Saved research (lib/research.ts) ----------
+    // Anyone signed in can open a briefing by its id: that is the share link, and the id is the secret.
+    // Lists only ever show your own briefings and the ones you collaborate on.
+    match /research/{id} {
+      allow get: if signedIn();
+      allow list: if signedIn() && (resource.data.ownerId == request.auth.uid || request.auth.uid in resource.data.collaborators);
+      allow create: if signedIn()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.collaborators.size() == 0;
+      allow delete: if signedIn() && resource.data.ownerId == request.auth.uid;
+      allow update: if signedIn() && (
+        // The owner can change anything except who owns it.
+        (resource.data.ownerId == request.auth.uid && request.resource.data.ownerId == resource.data.ownerId)
+        // Collaborators add follow-up questions and notes.
+        || (request.auth.uid in resource.data.collaborators
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['followups', 'notes', 'updatedAt']))
+        // Anyone with the link can join (adding only themselves), and a collaborator can leave (removing only themselves).
+        || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['collaborators', 'collaboratorNames', 'updatedAt'])
+            && (
+              request.resource.data.collaborators.toSet().difference(resource.data.collaborators.toSet()) == [request.auth.uid].toSet()
+              || resource.data.collaborators.toSet().difference(request.resource.data.collaborators.toSet()) == [request.auth.uid].toSet()
+            )
+            && request.resource.data.collaboratorNames.diff(resource.data.collaboratorNames).affectedKeys().hasOnly([request.auth.uid]))
+      );
+    }
   }
 }
