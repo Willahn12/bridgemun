@@ -145,7 +145,12 @@ service cloud.firestore {
             request.resource.data.kind == 'human'
             && request.resource.data.user_id == request.auth.uid
             && room(roomId).status == 'live'
-            && room(roomId).turn_user == request.auth.uid
+            && (
+              room(roomId).turn_user == request.auth.uid
+              // During an unmoderated caucus anyone in the forum may type informally.
+              || ('caucus' in room(roomId) && room(roomId).caucus != null && room(roomId).caucus.type == 'unmod'
+                  && request.resource.data.informal == true)
+            )
           )
           || (request.resource.data.kind in ['ai', 'chair', 'point'] && isRoomHost(roomId))
         );

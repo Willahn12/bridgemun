@@ -42,6 +42,8 @@ import {
   setRequestStatus,
   watchRequests,
   type RoomRequest,
+  type Caucus,
+  type MotionKind,
   updateRoom,
   uploadClip,
   watchRoom,
@@ -56,7 +58,8 @@ const JUDGE_VOICE = 5;
 const DEBATE_ROUNDS = 2;
 /* Seconds each human gets per turn. */
 /** A speaker's time in this room, in seconds: shared out from the forum's length when it started, or the defaults. */
-const limitFor = (r: Room | null, stage: "opening" | "debate" | "closing") => r?.limits?.[stage] ?? DEFAULT_LIMITS[stage];
+const limitFor = (r: Room | null, stage: "opening" | "debate" | "closing") =>
+  stage === "debate" && r?.caucus?.type === "mod" ? r.caucus.speakingTime : (r?.limits?.[stage] ?? DEFAULT_LIMITS[stage]);
 
 /* About 2.6 words a second is a comfortable speaking pace. A speech that would run over the speaker's time is
    read a little faster, never more than 1.3 times, so it stays easy to follow. */
@@ -174,6 +177,7 @@ export default function RoomPage() {
   const [requests, setRequests] = useState<RoomRequest[]>([]);
   const requestsRef = useRef<RoomRequest[]>([]);
   const closeDebateRef = useRef(false);
+  const stageRef = useRef<Stage | null>(null); // the stage the engine is running, ahead of the stored phase
   const extraRoundsRef = useRef(0);
   const [procOpen, setProcOpen] = useState<null | "point" | "motion" | "resolution">(null);
   const [procBusy, setProcBusy] = useState(false);
@@ -383,6 +387,8 @@ export default function RoomPage() {
               order: order ?? [],
               only,
               positions: r.positions.map(briefLine),
+              ...(r.caucus?.type === "mod" ? { caucus: { topic: r.caucus.topic, speakingTime: r.caucus.speakingTime } } : {}),
+              ...(r.caucus?.type === "unmod" ? { informal: true } : {}),
               ...extra,
             }),
           });
@@ -600,6 +606,30 @@ export default function RoomPage() {
     [closeVote, patchRoom, rule],
   );
 
+  /* An unmoderated caucus: formal turns stop, everyone may type freely, and the AI delegations lobby once
+     about a third of the way in. Runs inside the forum engine, so the next speech waits until it ends. */
+  const runUnmod = useCallback(
+    async (minutes: number) => {
+      const until = new Date(Date.now() + minutes * 60000).toISOString();
+      const caucus: Caucus = { type: "unmod", until };
+      await patchRoom({ caucus }, { caucus });
+      await rule(`Formal debate is suspended for a ${minutes}-minute unmoderated caucus. Everyone may now type freely to lobby, find allies and work on draft resolutions.`);
+      let lobbied = false;
+      while (Date.now() < Date.parse(until)) {
+        const r = roomRef.current;
+        if (!r || r.status !== "live" || r.caucus?.type !== "unmod") break;
+        if (!lobbied && Date.now() > Date.parse(until) - minutes * 40000 && activeAi(r).length) {
+          lobbied = true;
+          await runAi("reply");
+        }
+        await sleep(1000);
+      }
+      await patchRoom({ caucus: null }, { caucus: null });
+      await rule("The unmoderated caucus has ended. The committee returns to formal debate.");
+    },
+    [patchRoom, rule, runAi],
+  );
+
   /* Takes every pending request, oldest first. Runs between speeches, so nobody is cut off mid-turn. */
   const handleRequests = useCallback(async () => {
     for (;;) {
@@ -627,34 +657,67 @@ export default function RoomPage() {
           await rule("The moderator notes the point.");
         }
       } else if (q.kind === "motion") {
-        const close = q.type === "close";
-        await post("point", q.from, close ? "Motion to close debate." : "Motion to extend debate by one more round.");
+        const kind = q.type as MotionKind;
+        const minutes = Math.round(q.minutes ?? 0);
+        const seconds = Math.round(q.speakingTime ?? 0);
+        const words: Record<MotionKind, string> = {
+          close: "Motion to close debate.",
+          extend: "Motion to extend debate by one more round.",
+          mod: `Motion for a ${minutes}-minute moderated caucus on "${q.text}", ${seconds} seconds per speaker.`,
+          unmod: `Motion for a ${minutes}-minute unmoderated caucus.`,
+        };
+        if (!words[kind]) continue;
+        await post("point", q.from, words[kind]);
+        const left = r.endsAt ? Date.parse(r.endsAt) - Date.now() : Infinity;
         const wrong =
-          r.phase !== "debate"
-            ? "motions to close or extend debate are only taken during debate"
-            : !close && r.endsAt
-              ? "this forum has a set end time, so debate cannot be extended"
-              : close && closeDebateRef.current
-                ? "debate is already closing"
-                : null;
+          (stageRef.current ?? r.phase) !== "debate"
+            ? "motions are only taken during debate"
+            : closeDebateRef.current
+              ? "debate is already closing"
+              : (kind === "mod" || kind === "unmod") && r.caucus
+                ? "a caucus is already in progress"
+                : kind === "extend" && r.endsAt
+                  ? "this forum has a set end time, so debate cannot be extended"
+                  : kind === "mod" && (!q.text.trim() || minutes < 2 || minutes > 10 || seconds < 30 || seconds > 120)
+                    ? "a moderated caucus needs a topic, 2 to 10 minutes and 30 to 120 seconds per speaker"
+                    : kind === "unmod" && (minutes < 1 || minutes > 10)
+                      ? "an unmoderated caucus lasts 1 to 10 minutes"
+                      : (kind === "mod" || kind === "unmod") && minutes * 60000 > left - 3 * 60000
+                        ? "there is not enough time left in the forum"
+                        : null;
         if (wrong) {
           await rule(`The motion is out of order: ${wrong}.`);
           continue;
         }
-        const result = await autoVote(close ? `Motion to close debate (moved by ${q.from})` : `Motion to extend debate by one round (moved by ${q.from})`, {
-          motion: close ? `close debate (moved by ${q.from})` : `extend debate by one more round (moved by ${q.from})`,
-        }, "motion");
-        if (result?.passed) {
-          if (close) closeDebateRef.current = true;
-          else extraRoundsRef.current += 1;
-          await rule(close ? "Debate will close after the current speaker. Closing statements follow." : "Debate is extended by one more round.");
+        const question: Record<MotionKind, string> = {
+          close: `Motion to close debate (moved by ${q.from})`,
+          extend: `Motion to extend debate by one round (moved by ${q.from})`,
+          mod: `Moderated caucus on "${q.text}", ${minutes} ${minutes === 1 ? "minute" : "minutes"}, ${seconds} seconds per speaker (moved by ${q.from})`,
+          unmod: `Unmoderated caucus of ${minutes} ${minutes === 1 ? "minute" : "minutes"} (moved by ${q.from})`,
+        };
+        const result = await autoVote(question[kind], { motion: question[kind] }, "motion");
+        if (!result?.passed) continue;
+        if (kind === "close") {
+          closeDebateRef.current = true;
+          await rule("Debate will close after the current speaker. Closing statements follow.");
+        } else if (kind === "extend") {
+          extraRoundsRef.current += 1;
+          await rule("Debate is extended by one more round.");
+        } else if (kind === "mod") {
+          const speeches = Math.max(2, Math.floor((minutes * 60) / seconds));
+          // The next turn is the one after the current cursor; the caucus covers that many turns from there.
+          const caucus: Caucus = { type: "mod", topic: q.text.slice(0, 120), speakingTime: seconds, endCursor: (roomRef.current?.cursor ?? 0) + 1 + speeches };
+          await patchRoom({ caucus }, { caucus });
+          await rule(`The committee enters a moderated caucus on "${caucus.topic}". Each speaker has ${seconds} seconds, for ${speeches} speeches.`);
+        } else {
+          await runUnmod(minutes);
         }
       } else if (q.kind === "resolution" && q.title) {
         await post("point", q.from, `Introduces the draft resolution "${q.title}": ${q.clauses.map((c, i) => `${i + 1}. ${c}`).join(" ")}`);
         await rule(`The chair thanks the delegate of ${q.from}. The draft resolution "${q.title}" will be put to a vote after closing statements.`);
       }
     }
-  }, [post, rule, runAi, autoVote]);
+  }, [post, rule, runAi, autoVote, patchRoom, runUnmod]);
 
   /* After closing statements: each draft resolution goes to a vote. */
   const voteOnResolutions = useCallback(async () => {
@@ -695,11 +758,14 @@ export default function RoomPage() {
         const first = stages.indexOf(startStage);
         for (let si = first; si < stages.length; si++) {
           const stage = stages[si];
+          stageRef.current = stage;
           let i = si === first ? startCursor : 0;
           const more = () => {
             if (timeLeft() <= 0 || !active()) return false;
             if (stage === "debate") {
               if (closeDebateRef.current) return false; // a motion to close debate passed
+              const c = roomRef.current?.caucus;
+              if (!timed() && c?.type === "mod" && i < c.endCursor) return true; // let a moderated caucus finish
               return timed() ? timeLeft() > reserve() : i < len() * (DEBATE_ROUNDS + extraRoundsRef.current);
             }
             return i < len();
@@ -720,9 +786,17 @@ export default function RoomPage() {
             await handleRequests();
             if (flowTokenRef.current !== token) return;
             if (!more()) break;
-            idle = (await doTurn(stage, i)) ? 0 : idle + 1;
+            const spoke = await doTurn(stage, i);
+            idle = spoke ? 0 : idle + 1;
             i++;
+            const c = roomRef.current?.caucus;
+            if (stage === "debate" && c?.type === "mod" && i >= c.endCursor) {
+              await patchRoom({ caucus: null }, { caucus: null });
+              await say("The moderated caucus has elapsed. The committee returns to general debate.");
+            }
           }
+          // A caucus never outlives debate.
+          if (stage === "debate" && roomRef.current?.caucus) await patchRoom({ caucus: null }, { caucus: null });
           if (timeLeft() <= 0) {
             await say("Time is up for this forum.");
             break;
@@ -739,7 +813,7 @@ export default function RoomPage() {
         if (flowTokenRef.current === token) flowRunRef.current = false;
       }
     },
-    [doTurn, finishSession, say, handleRequests, voteOnResolutions],
+    [doTurn, finishSession, say, handleRequests, voteOnResolutions, patchRoom],
   );
 
   /* Host only: turns a country's seat over to the AI or back. Mid-session, a new AI seat joins the end of the
@@ -1135,7 +1209,8 @@ export default function RoomPage() {
     const attached = useClip && speakMode === "own" ? clip : null;
     const typed = text.trim();
     const body = typed || (attached ? "(Spoken recording)" : "");
-    if (!body || !room || !userId || !myTurn || sending || recorder.recording) return;
+    const informal = room?.caucus?.type === "unmod" && !myTurn;
+    if (!body || !room || !userId || (!myTurn && !informal) || sending || recorder.recording) return;
     if (dictation.listening) dictation.stop();
     setSending(true);
     setError(null);
@@ -1153,7 +1228,7 @@ export default function RoomPage() {
           );
         }
       }
-      const line = await postLine(room.id, userId, myLabel, "human", body, { audioPath, live });
+      const line = await postLine(room.id, userId, myLabel, "human", body, { audioPath, live, informal });
       setInput("");
       clearClip();
       receive(line);
@@ -1269,6 +1344,17 @@ export default function RoomPage() {
     return out;
   })();
   const otherDelegations = room.turnOrder.filter((t) => !t.off && t.name !== me?.country).map((t) => t.name);
+  const unmodOpen = live && room.caucus?.type === "unmod" && !!me && !me.moderator;
+  const caucusNote =
+    !live || !room.caucus
+      ? null
+      : room.caucus.type === "mod"
+        ? (() => {
+            // Speeches still to come after the current one.
+            const more = Math.max(0, room.caucus.endCursor - room.cursor - 1);
+            return `Moderated caucus on "${room.caucus.topic}": ${room.caucus.speakingTime} seconds each, ${more ? `${more} more ${more === 1 ? "speech" : "speeches"} to come` : "last speech"}.`;
+          })()
+        : `Unmoderated caucus: ${mmss(Date.parse(room.caucus.until) - now)} left. Everyone may type freely.`;
   const lowTime = secondsLeft !== null && secondsLeft <= 10;
   const sessionLeft = live && room.endsAt ? Date.parse(room.endsAt) - now : null;
   const startsIn = room.status === "lobby" && room.startsAt ? Date.parse(room.startsAt) - now : null;
@@ -1958,7 +2044,7 @@ export default function RoomPage() {
                 id="say"
                 rows={3}
                 value={input}
-                disabled={!myTurn}
+                disabled={!myTurn && !unmodOpen}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
@@ -1968,7 +2054,9 @@ export default function RoomPage() {
                 }}
                 className="field resize-none disabled:opacity-60"
                 placeholder={
-                  !myTurn
+                  !myTurn && unmodOpen
+                    ? "Unmoderated caucus: type freely to lobby and find allies. Enter to send."
+                    : !myTurn
                     ? "You can speak when the judge calls on you."
                     : speakMode === "live"
                       ? "Press Go live and talk: everyone hears you now. Your words appear here as captions…"
@@ -2077,7 +2165,7 @@ export default function RoomPage() {
                 <button
                   type="button"
                   onClick={() => send(input)}
-                  disabled={!myTurn || sending || recorder.recording || broadcasting || (!input.trim() && !(speakMode === "own" && clip))}
+                  disabled={(!myTurn && !unmodOpen) || sending || recorder.recording || broadcasting || (!input.trim() && !(speakMode === "own" && clip))}
                   className="btn btn-primary"
                 >
                   <ArrowUp aria-hidden="true" size={18} weight="bold" />
@@ -2088,6 +2176,7 @@ export default function RoomPage() {
           )}
           {live && (
             <div className="shrink-0 border-t border-line pt-3 text-sm">
+              {caucusNote && <p className="mb-1 font-medium text-accent">{caucusNote}</p>}
               {upNext.length > 0 && (
                 <p className="text-muted">
                   <span className="font-semibold text-ink">Up next:</span> {upNext.join(", ")}
@@ -2145,6 +2234,46 @@ export default function RoomPage() {
                           </span>
                         </button>
                       </div>
+                      <form
+                        className="mt-3 grid gap-2 border-t border-line pt-3 sm:grid-cols-[1fr_auto_auto_auto]"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          const f = new FormData(e.currentTarget);
+                          submitRequest({ kind: "motion", type: "mod", text: String(f.get("topic") ?? "").trim(), minutes: Number(f.get("minutes")), speakingTime: Number(f.get("seconds")) });
+                        }}
+                      >
+                        <label className="flex flex-col gap-1 text-xs text-muted">
+                          Moderated caucus topic
+                          <input name="topic" required maxLength={120} className="field" placeholder="e.g. Funding for waste systems" />
+                        </label>
+                        <label className="flex flex-col gap-1 text-xs text-muted">
+                          Minutes
+                          <input name="minutes" type="number" min={2} max={10} defaultValue={5} className="field w-20" />
+                        </label>
+                        <label className="flex flex-col gap-1 text-xs text-muted">
+                          Seconds each
+                          <input name="seconds" type="number" min={30} max={120} defaultValue={60} className="field w-24" />
+                        </label>
+                        <button type="submit" className="btn self-end" disabled={procBusy || room.phase !== "debate" || !!room.caucus}>
+                          Move
+                        </button>
+                      </form>
+                      <form
+                        className="mt-2 flex flex-wrap items-end gap-2"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          submitRequest({ kind: "motion", type: "unmod", minutes: Number(new FormData(e.currentTarget).get("minutes")) });
+                        }}
+                      >
+                        <label className="flex flex-col gap-1 text-xs text-muted">
+                          Unmoderated caucus, minutes
+                          <input name="minutes" type="number" min={1} max={10} defaultValue={3} className="field w-24" />
+                        </label>
+                        <button type="submit" className="btn" disabled={procBusy || room.phase !== "debate" || !!room.caucus}>
+                          Move
+                        </button>
+                        <span className="text-xs text-muted">Everyone types freely to lobby; formal turns pause.</span>
+                      </form>
                       {room.phase !== "debate" && <p className="mt-2 text-xs text-muted">Motions are taken during debate.</p>}
                     </section>
                   )}
@@ -2263,6 +2392,7 @@ function Transcript({ lines, userId }: { lines: RoomLine[]; userId: string | und
             <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted">
               <Flag country={l.speaker} className="h-3 w-4" />
               {l.speaker}
+              {l.informal && <span className="font-normal italic">(informal)</span>}
             </p>
             <div
               className={`break-words rounded-[var(--radius-ui)] border p-3 text-sm leading-relaxed ${

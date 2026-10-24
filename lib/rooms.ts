@@ -117,6 +117,8 @@ export interface Room {
   limits: TurnLimits | null;
   /** Where each AI delegation stands, fetched by the host when the forum starts (lib/positions.ts). */
   positions: Position[];
+  /** A caucus in progress: moderated (a narrower topic, shorter speeches) or unmoderated (everyone types freely). */
+  caucus: Caucus | null;
 }
 
 export interface RoomMember {
@@ -143,6 +145,8 @@ export interface RoomLine {
   refId: string | null;
   /** Said live over the microphone: everyone already heard it, so it is not read out again. */
   live: boolean;
+  /** Typed during an unmoderated caucus: informal lobbying, not a speech. */
+  informal: boolean;
 }
 
 /* Firestore document fields below deliberately keep the same snake_case names the app already
@@ -183,6 +187,7 @@ function toRoom(id: string, r: Record<string, unknown>): Room {
     endAt: (r.end_at as string | null) ?? null,
     limits: (r.limits as TurnLimits | null) ?? null,
     positions: Array.isArray(r.positions) ? (r.positions as Position[]) : [],
+    caucus: (r.caucus as Caucus | null) ?? null,
   };
 }
 
@@ -203,6 +208,7 @@ const toLine = (id: string, r: Record<string, unknown>): RoomLine => ({
   audioPath: (r.audio_path as string | null) ?? null,
   refId: (r.ref_id as string | null) ?? null,
   live: r.live === true,
+  informal: r.informal === true,
 });
 
 export function friendlyRoomError(message: string): string {
@@ -473,7 +479,7 @@ export async function postLine(
   speaker: string,
   kind: RoomLine["kind"],
   text: string,
-  extra: { audioPath?: string; refId?: string; live?: boolean } = {},
+  extra: { audioPath?: string; refId?: string; live?: boolean; informal?: boolean } = {},
 ): Promise<RoomLine> {
   const data = {
     user_id: kind === "human" ? userId : null,
@@ -484,6 +490,7 @@ export async function postLine(
     ...(extra.audioPath ? { audio_path: extra.audioPath } : {}),
     ...(extra.refId ? { ref_id: extra.refId } : {}),
     ...(extra.live ? { live: true } : {}),
+    ...(extra.informal ? { informal: true } : {}),
   };
   const ref = await addDoc(collection(db(), "rooms", roomId, "lines"), data);
   return toLine(ref.id, data);
@@ -629,7 +636,10 @@ export async function clipUrl(path: string): Promise<string> {
    resolutions are voted on after closing statements. */
 
 export type RequestKind = "point" | "motion" | "resolution";
-export type MotionKind = "close" | "extend";
+export type MotionKind = "close" | "extend" | "mod" | "unmod";
+
+/* A moderated caucus runs until the speaking order reaches `endCursor` (the turn number it ends before). */
+export type Caucus = { type: "mod"; topic: string; speakingTime: number; endCursor: number } | { type: "unmod"; until: string };
 
 export interface RoomRequest {
   id: string;
@@ -644,6 +654,9 @@ export interface RoomRequest {
   to: string | null;
   title: string | null;
   clauses: string[];
+  /** Caucus motions: total minutes, and seconds per speaker for a moderated caucus. */
+  minutes: number | null;
+  speakingTime: number | null;
   /** "pending" until the chair takes it; resolutions then stay "introduced" until voted on. */
   status: "pending" | "introduced" | "done";
   at: number;
@@ -659,6 +672,8 @@ const toRequest = (id: string, r: Record<string, unknown>): RoomRequest => ({
   to: (r.to as string | null) ?? null,
   title: (r.title as string | null) ?? null,
   clauses: Array.isArray(r.clauses) ? (r.clauses as string[]) : [],
+  minutes: typeof r.minutes === "number" ? r.minutes : null,
+  speakingTime: typeof r.speaking_time === "number" ? r.speaking_time : null,
   status: (r.status as RoomRequest["status"]) ?? "pending",
   at: (r.at as Timestamp | undefined)?.toMillis?.() ?? Date.now(),
 });
@@ -666,7 +681,7 @@ const toRequest = (id: string, r: Record<string, unknown>): RoomRequest => ({
 export async function raiseRequest(
   roomId: string,
   from: string,
-  req: { kind: RequestKind; type?: string; text?: string; to?: string | null; title?: string; clauses?: string[] },
+  req: { kind: RequestKind; type?: string; text?: string; to?: string | null; title?: string; clauses?: string[]; minutes?: number; speakingTime?: number },
 ) {
   const uid = currentUser()?.id;
   if (!uid) throw new Error("Sign in first.");
@@ -679,6 +694,8 @@ export async function raiseRequest(
     to: req.to ?? null,
     title: req.title ? req.title.slice(0, 150) : null,
     clauses: (req.clauses ?? []).slice(0, 8).map((c) => c.slice(0, 400)),
+    minutes: req.minutes ?? null,
+    speaking_time: req.speakingTime ?? null,
     status: "pending",
     at: Timestamp.now(),
   });

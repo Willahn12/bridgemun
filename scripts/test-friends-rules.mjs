@@ -69,6 +69,16 @@ await expect("a member cannot mark it done", false, () => updateDoc(doc(b.db, "r
 await expect("the host marks it done", true, () => updateDoc(doc(a.db, "rooms", roomRef.id, "requests", rid), { status: "done" }));
 await expect("the host posts a point line", true, () => addDoc(collection(a.db, "rooms", roomRef.id, "lines"), { user_id: null, speaker: "France", kind: "point", text: "Point of order: Over time", created_at: Timestamp.now() }));
 await expect("a member cannot post a point line", false, () => addDoc(collection(b.db, "rooms", roomRef.id, "lines"), { user_id: b.uid, speaker: "France", kind: "point", text: "x", created_at: Timestamp.now() }));
+await expect("outside a caucus, a member cannot type when it is not their turn", false, () =>
+  addDoc(collection(b.db, "rooms", roomRef.id, "lines"), { user_id: b.uid, speaker: "France", kind: "human", text: "hi", informal: true, created_at: Timestamp.now() }));
+await updateDoc(roomRef, { caucus: { type: "unmod", until: new Date(Date.now() + 60000).toISOString() } });
+await expect("during an unmoderated caucus a member types informally", true, () =>
+  addDoc(collection(b.db, "rooms", roomRef.id, "lines"), { user_id: b.uid, speaker: "France", kind: "human", text: "Shall we co-sponsor?", informal: true, created_at: Timestamp.now() }));
+await expect("but not as a formal speech", false, () =>
+  addDoc(collection(b.db, "rooms", roomRef.id, "lines"), { user_id: b.uid, speaker: "France", kind: "human", text: "Formal", created_at: Timestamp.now() }));
+await expect("and not as someone else", false, () =>
+  addDoc(collection(b.db, "rooms", roomRef.id, "lines"), { user_id: a.uid, speaker: "France", kind: "human", text: "x", informal: true, created_at: Timestamp.now() }));
+await updateDoc(roomRef, { caucus: null });
 await updateDoc(roomRef, { status: "ended" });
 await expect("no requests once the forum has ended", false, () => addDoc(collection(b.db, "rooms", roomRef.id, "requests"), req));
 
