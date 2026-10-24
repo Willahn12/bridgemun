@@ -38,7 +38,12 @@ export interface Procedure {
   aiSuggestions: number;
   /** The draft resolution introduced during debate, voted on after closing statements. */
   resolution?: Resolution;
+  /** General debate's speakers' list, in speaking order. The student appears as the HUMAN marker from lib/sessions. */
+  speakers?: string[];
 }
+
+/* A delegation that has just spoken from the speakers' list goes back to the end of it. */
+export const afterSpeaking = (list: string[], who: string) => [...list.filter((n) => n !== who), who];
 
 export interface Resolution {
   title: string;

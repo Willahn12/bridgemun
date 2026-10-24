@@ -140,7 +140,8 @@ function task(b: Body): string {
 }
 
 function system(b: Body): string {
-  const wantsChair = b.judge && !b.informal && (b.directive === "reply" || b.directive === "continue");
+  // A delegation called from the speakers' list was already recognized by the app.
+  const wantsChair = b.judge && !b.informal && (b.directive === "reply" || (b.directive === "continue" && !b.only));
   const isJudgeOnly = b.directive === "open" || b.directive === "adjourn" || (b.directive === "point" && b.point?.type !== "information");
   const shape = isJudgeOnly || b.directive === "vote" || b.directive === "suggest"
     ? ""
@@ -276,7 +277,7 @@ export async function POST(req: Request) {
     if (!speeches.length) throw new Error("The model returned no usable speech.");
     // Only debate replies carry the judge's words; for opening and closing statements the app has already
     // recognized the speaker, and a second recognition from the model would repeat it.
-    const wantsChair = body.judge && !body.informal && (body.directive === "reply" || body.directive === "continue");
+    const wantsChair = body.judge && !body.informal && (body.directive === "reply" || (body.directive === "continue" && !body.only));
     return NextResponse.json({ speeches, ...(wantsChair && chair ? { chair } : {}) });
   } catch (e) {
     const detail = e instanceof Error ? e.message : "Unknown error";

@@ -12,6 +12,7 @@ import { ResolutionBallot, ResolutionDraft } from "@/components/delegate/Resolut
 import { pointLine, type PointType } from "@/lib/points";
 import {
   AI_MOTION_TYPES,
+  afterSpeaking,
   aiMayMove,
   byPriority,
   caucusSpeeches,
@@ -312,8 +313,9 @@ export default function SessionView({
   const enterDebate = useCallback(async () => {
     setPhase("debate");
     setCursorTo(0);
+    if (mode === "committee") setProcedure({ ...procRef.current, speakers: order.filter((n) => n !== HUMAN) });
     await say(`Opening statements are complete. The floor is now open for general debate on "${initial.topic}".`);
-  }, [say, setCursorTo, initial.topic]);
+  }, [say, setCursorTo, initial.topic, mode, order, setProcedure]);
 
   /* After closing statements: the committee votes on the draft resolution, if one was introduced. */
   const votingProcedure = useCallback(async () => {
@@ -653,6 +655,29 @@ export default function SessionView({
     await aiTurn("reply");
   }
 
+  /* ---------- Speakers' list (committee mode, general debate) ---------- */
+  const speakers = procedure.speakers ?? order.filter((n) => n !== HUMAN);
+  const nextUp = speakers[0];
+  const showList = mode === "committee" && judge && phase === "debate" && unmodEnds === null && !procedure.caucus;
+
+  async function nextSpeaker() {
+    const who = (procRef.current.speakers ?? speakers)[0];
+    if (!who || who === HUMAN) return;
+    silence();
+    setError(null);
+    stickRef.current = true;
+    const epoch = epochRef.current;
+    await say(`The chair recognizes the delegate of ${who} from the speakers' list.`);
+    if (epochRef.current !== epoch) return;
+    const ok = await aiTurn("continue", who);
+    if (ok) setProcedure({ ...procRef.current, speakers: afterSpeaking(procRef.current.speakers ?? speakers, who) });
+  }
+
+  function toggleMe() {
+    const list = procRef.current.speakers ?? speakers;
+    setProcedure({ ...procRef.current, speakers: list.includes(HUMAN) ? list.filter((n) => n !== HUMAN) : [...list, HUMAN] });
+  }
+
   /* ---------- Points (not speeches, so they do not count against debate time) ---------- */
   async function raisePoint(type: PointType, text: string, to?: string) {
     silence();
@@ -699,6 +724,9 @@ export default function SessionView({
     const spoken = spokenCount(linesRef.current);
     const limit = procRef.current.limit;
     const caucus = informal ? undefined : procRef.current.caucus;
+    // Speaking in general debate takes the student off the speakers' list.
+    const list = procRef.current.speakers;
+    if (!informal && !caucus && list?.includes(HUMAN)) setProcedure({ ...procRef.current, speakers: list.filter((n) => n !== HUMAN) });
     (async () => {
       const epoch = epochRef.current;
       if (judge && caucus && text.split(/\s+/).length > caucus.speakingTime * 2.5) {
@@ -1085,6 +1113,25 @@ export default function SessionView({
             </div>
           ) : (
             <>
+              {showList && (
+                <div className="mb-3 flex flex-wrap items-center gap-2 text-sm" aria-label="Speakers' list">
+                  <span className="font-medium">Speakers&rsquo; list</span>
+                  <ol className="flex flex-wrap gap-1.5">
+                    {speakers.map((n, i) => (
+                      <li
+                        key={n}
+                        className={`rounded-full border px-2.5 py-0.5 ${i === 0 ? "border-accent font-medium" : "border-line text-muted"}`}
+                      >
+                        {n === HUMAN ? `${humanName} (you)` : n}
+                      </li>
+                    ))}
+                  </ol>
+                  <button type="button" className="text-sm font-medium text-accent underline-offset-2 hover:underline" onClick={toggleMe}>
+                    {speakers.includes(HUMAN) ? "Remove me" : "Add me"}
+                  </button>
+                  {nextUp === HUMAN && <span className="text-muted">You are next: give your speech.</span>}
+                </div>
+              )}
               <label htmlFor="turn" className="sr-only">
                 Your speech or question
               </label>
@@ -1115,7 +1162,18 @@ export default function SessionView({
                     {dictation.listening ? <Stop aria-hidden="true" size={18} weight="fill" /> : <Microphone aria-hidden="true" size={18} />}
                     {dictation.listening ? "Stop" : "Speak"}
                   </button>
-                  {phase === "debate" && mode === "committee" && (
+                  {phase === "debate" && mode === "committee" && showList && (
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={thinking || !nextUp || nextUp === HUMAN}
+                      title={nextUp === HUMAN ? "You are next on the speakers' list: give your speech" : undefined}
+                      onClick={nextSpeaker}
+                    >
+                      {nextUp && nextUp !== HUMAN ? `Next speaker: ${nextUp}` : "Next speaker"}
+                    </button>
+                  )}
+                  {phase === "debate" && mode === "committee" && !showList && (
                     <button
                       type="button"
                       className="btn"
