@@ -34,11 +34,21 @@ export default function SetupForm({
   const [judge, setJudge] = useState(true);
 
   const cleaned = ai.map((c) => c.trim());
-  const valid =
-    committee.trim() !== "" &&
-    topic.trim() !== "" &&
-    cleaned.every(Boolean) &&
-    new Set(cleaned.map((c) => c.toLowerCase())).size === cleaned.length;
+  const mine = humanCountry.trim().toLowerCase();
+  /* Free typing is allowed, so the same country can be entered twice; catch that here (including your own country). */
+  const problem =
+    committee.trim() === ""
+      ? "Enter a committee."
+      : topic.trim() === ""
+        ? "Enter a topic."
+        : !cleaned.every(Boolean)
+          ? "Choose a country for every AI delegation."
+          : new Set(cleaned.map((c) => c.toLowerCase())).size !== cleaned.length
+            ? "Each AI delegation needs a different country."
+            : mine && cleaned.some((c) => c.toLowerCase() === mine)
+              ? `You already represent ${humanCountry.trim()}. Pick a different country for the AI.`
+              : null;
+  const valid = problem === null;
 
   return (
     <form
@@ -128,6 +138,9 @@ export default function SetupForm({
         )}
       </div>
 
+      {problem && (committee || topic || cleaned.some(Boolean)) && (
+        <p role="alert" className="mt-6 text-sm text-danger">{problem}</p>
+      )}
       <button type="submit" disabled={!valid} className="btn btn-primary mt-6 w-full">
         Continue to save options
       </button>
