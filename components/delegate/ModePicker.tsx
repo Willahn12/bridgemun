@@ -8,7 +8,7 @@ import type { Mode } from "@/lib/sessions";
 const CARD =
   "group relative flex h-full flex-col rounded-[var(--radius-ui)] border-2 border-ink p-6 text-left shadow-[6px_6px_0_var(--ink)] transition-all duration-200 hover:-translate-y-1 hover:shadow-[9px_9px_0_var(--ink)] active:translate-y-0 active:shadow-[3px_3px_0_var(--ink)]";
 
-const BADGE = "mb-5 grid size-16 place-items-center rounded-2xl border-2 border-ink bg-surface transition-transform duration-200 group-hover:-rotate-6 group-hover:scale-110";
+const BADGE = "mb-5 grid size-16 place-items-center rounded-2xl border-2 border-ink bg-[var(--tone)] transition-transform duration-200 group-hover:-rotate-6 group-hover:scale-110";
 
 export default function ModePicker({ onPick }: { onPick: (mode: Mode) => void }) {
   const [compOpen, setCompOpen] = useState(false);
@@ -16,45 +16,45 @@ export default function ModePicker({ onPick }: { onPick: (mode: Mode) => void })
   return (
     <div className="grid gap-6">
       <div className="grid gap-6 md:grid-cols-3">
-        <button type="button" className={CARD} style={{ background: "var(--cyan)" }} onClick={() => onPick("solo")}>
+        <button type="button" className={CARD} style={{ background: "var(--surface)", "--tone": "var(--cyan)" } as React.CSSProperties} onClick={() => onPick("solo")}>
           <span className={BADGE}>
             <User aria-hidden="true" size={34} weight="fill" color="#0c2b4b" />
           </span>
-          <span className="font-display text-2xl font-extrabold leading-tight text-[#0c2b4b]">Practice, solo</span>
-          <span className="mt-2 flex-1 leading-relaxed text-[#0c2b4b]/85">One AI delegate. Talk back and forth, one on one.</span>
-          <ArrowRight aria-hidden="true" size={24} weight="bold" className="mt-5 text-[#0c2b4b] transition-transform group-hover:translate-x-1.5" />
+          <span className="font-display text-2xl font-extrabold leading-tight text-ink">Practice, solo</span>
+          <span className="mt-2 flex-1 leading-relaxed text-muted">One AI delegate. Talk back and forth, one on one.</span>
+          <ArrowRight aria-hidden="true" size={24} weight="bold" className="mt-5 text-ink transition-transform group-hover:translate-x-1.5" />
         </button>
 
-        <button type="button" className={CARD} style={{ background: "var(--sun)" }} onClick={() => onPick("committee")}>
+        <button type="button" className={CARD} style={{ background: "var(--surface)", "--tone": "var(--sun)" } as React.CSSProperties} onClick={() => onPick("committee")}>
           <span className={BADGE}>
             <UsersThree aria-hidden="true" size={34} weight="fill" color="#0c2b4b" />
           </span>
-          <span className="font-display text-2xl font-extrabold leading-tight text-[#0c2b4b]">Practice, with several AI delegates</span>
-          <span className="mt-2 flex-1 leading-relaxed text-[#0c2b4b]/85">
+          <span className="font-display text-2xl font-extrabold leading-tight text-ink">Practice, with several AI delegates</span>
+          <span className="mt-2 flex-1 leading-relaxed text-muted">
             A full room of AI countries. They listen, answer, argue with each other, and give you the floor.
           </span>
-          <ArrowRight aria-hidden="true" size={24} weight="bold" className="mt-5 text-[#0c2b4b] transition-transform group-hover:translate-x-1.5" />
+          <ArrowRight aria-hidden="true" size={24} weight="bold" className="mt-5 text-ink transition-transform group-hover:translate-x-1.5" />
         </button>
 
         <button
           type="button"
           className={CARD}
-          style={{ background: "var(--mint)" }}
+          style={{ background: "var(--surface)", "--tone": "var(--mint)" } as React.CSSProperties}
           aria-expanded={compOpen}
           onClick={() => setCompOpen((v) => !v)}
         >
           <span className={BADGE}>
             <Broadcast aria-hidden="true" size={34} weight="fill" color="#0c2b4b" />
           </span>
-          <span className="font-display text-2xl font-extrabold leading-tight text-[#0c2b4b]">Comp mode</span>
-          <span className="mt-2 flex-1 leading-relaxed text-[#0c2b4b]/85">
+          <span className="font-display text-2xl font-extrabold leading-tight text-ink">Comp mode</span>
+          <span className="mt-2 flex-1 leading-relaxed text-muted">
             One AI delegate against a group of real people. Choose how the group takes part.
           </span>
           <ArrowRight
             aria-hidden="true"
             size={24}
             weight="bold"
-            className={`mt-5 text-[#0c2b4b] transition-transform ${compOpen ? "rotate-90" : "group-hover:translate-x-1.5"}`}
+            className={`mt-5 text-ink transition-transform ${compOpen ? "rotate-90" : "group-hover:translate-x-1.5"}`}
           />
         </button>
       </div>

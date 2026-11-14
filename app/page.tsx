@@ -2,7 +2,6 @@ import Link from "next/link";
 import {
   ArrowRight,
   Broadcast,
-  CaretDown,
   Chalkboard,
   GraduationCap,
   MagnifyingGlass,
@@ -148,10 +147,6 @@ export default function Home() {
           A LognCoding capstone for Apas Camp Lapu-Lapu Middle School, Cebu.
         </p>
       </div>
-      <p className="nudge absolute bottom-5 left-1/2 flex -translate-x-1/2 flex-col items-center text-sm font-medium text-muted">
-        Scroll to begin
-        <CaretDown aria-hidden="true" size={20} weight="bold" />
-      </p>
     </div>,
 
     /* 2. What the site does. */
@@ -282,7 +277,7 @@ export default function Home() {
     </div>,
 
     /* 7. Take the floor. */
-    <div key="go" className="flex min-h-full flex-col bg-accent text-white">
+    <div key="go" className="flex min-h-full flex-col bg-[linear-gradient(160deg,#3a8fd9,#1d63ab)] text-white">
       <div className="mx-auto flex w-full flex-1 max-w-4xl flex-col items-center justify-center px-4 py-16 text-center sm:px-6">
         <h2 data-anim="zoom" style={at(0)} className="text-5xl font-extrabold leading-[1] md:text-7xl">
           Ready to take the floor?

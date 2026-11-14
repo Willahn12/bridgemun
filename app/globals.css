@@ -46,6 +46,50 @@
   --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 28px -14px rgb(0 0 0 / 0.6);
 }
 
+/* Working pages (everything except the home page deck): calmer, Figma-style colours.
+   Soft blue-grey background, thin light borders and soft shadows instead of thick dark outlines,
+   one clear blue. Each page keeps its own accent colour as a thin stripe. Light theme only. */
+:root:not([data-theme="dark"]):not([data-deck]) {
+  --background: #f5f8fc;
+  --surface-sunk: #edf3fa;
+  --line: #d9e3ee;
+  --accent: #1580d8;
+  --edge: #c8d6e5;
+  --soft-shadow: 0 1px 2px rgb(16 42 67 / 0.05), 0 8px 24px -14px rgb(16 42 67 / 0.2);
+  /* Quieter versions of the bright accents: still recognisable, but soft, so blue leads like in the Figma. */
+  --sun: #f3d77a;
+  --cyan: #8fd0ec;
+  --coral: #f1a598;
+  --mint: #93d8bd;
+  --violet: #bdb3f0;
+  --sky: #d3e8f8;
+}
+/* Home page and opening screen: a middle step between the old bright palette and the calm working pages.
+   Still colourful and lively, just softer, so moving into the rest of the site feels smooth. */
+:root:not([data-theme="dark"]):is([data-deck], [data-intro]) {
+  --sun: #f7cf63;
+  --cyan: #6ccaef;
+  --coral: #f6998a;
+  --mint: #78d5b3;
+  --violet: #b0a4f5;
+  --sky: #d3e8fb;
+  --sky-glow: #e2f0fd;
+  --accent: #1580d8;
+}
+/* Big illustrations in page headers are a little calmer too. */
+:root:not([data-theme="dark"]):not([data-deck]) main header [aria-hidden="true"] svg,
+:root:not([data-theme="dark"]):not([data-deck]) main header .lg\:block { filter: saturate(0.7); }
+:root:not([data-theme="dark"]):not([data-deck]) main .border-ink { border-color: var(--edge); }
+:root:not([data-theme="dark"]):not([data-deck]) main :is(
+  [class*="shadow-[3px_3px_0_"], [class*="shadow-[4px_4px_0_"], [class*="shadow-[5px_5px_0_"],
+  [class*="shadow-[6px_6px_0_"], [class*="shadow-[8px_8px_0_"], [class*="shadow-[9px_9px_0_"]
+) { box-shadow: var(--soft-shadow); }
+:root:not([data-theme="dark"]):not([data-deck]) main .tone-card {
+  border-width: 1px;
+  border-color: var(--line);
+  box-shadow: inset 0 3px 0 var(--tone, var(--accent)), var(--soft-shadow);
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-surface: var(--surface);
@@ -57,12 +101,15 @@
   --color-accent-ink: var(--accent-ink);
   --color-danger: var(--danger);
   --font-sans: var(--font-body);
-  --font-display: var(--font-bric);
+  --font-display: var(--font-head);
   --font-mono: var(--font-geist-mono);
   --radius-ui: 12px;
 }
 
-h1, h2, h3 { text-wrap: balance; font-family: var(--font-bric), var(--font-body), system-ui, sans-serif; letter-spacing: -0.02em; }
+/* Headings: clean Inter Tight on the working pages; Bricolage stays on the opening screen, the home page and the logo. */
+:root { --font-head: var(--font-heading); }
+html[data-deck], .intro, [data-header-logo] { --font-head: var(--font-bric); }
+h1, h2, h3 { text-wrap: balance; font-family: var(--font-head), var(--font-body), system-ui, sans-serif; letter-spacing: -0.02em; }
 button, a, summary, select, [role="button"] { touch-action: manipulation; }
 
 /* One visible focus ring for every interactive control. */
@@ -213,8 +260,16 @@ html[data-intro] .intro { position: fixed; inset: 0; z-index: 60; display: block
 }
 html[data-motion="full"] .intro-pop { animation: intro-pop 700ms cubic-bezier(0.34, 1.56, 0.5, 1) both; }
 @keyframes intro-pop { from { opacity: 0; transform: scale(0.5) translateY(30px); } }
-html[data-motion="full"] .intro-blob { animation: intro-float 3.4s ease-in-out infinite alternate; }
-@keyframes intro-float { to { transform: translateY(-16px) scale(1.06); } }
+html[data-motion="full"] .intro-blob { animation: intro-blob-in 800ms cubic-bezier(0.34, 1.56, 0.5, 1) var(--delay, 0ms) backwards, intro-float var(--d, 3.4s) ease-in-out calc(var(--delay, 0ms) + 800ms) infinite alternate; }
+@keyframes intro-blob-in { from { opacity: 0; transform: scale(0.2); } }
+@keyframes intro-float { to { transform: translate(var(--fx, 0px), -16px) scale(1.06); } }
+/* The bridge in the logo draws itself, and the letters hop in one by one. */
+html[data-motion="full"] .intro-draw path { stroke-dasharray: 1; animation: intro-draw 900ms cubic-bezier(0.6, 0, 0.2, 1) 250ms backwards; }
+@keyframes intro-draw { from { stroke-dashoffset: 1; } }
+.intro-letter { display: inline-block; }
+html[data-motion="full"] .intro-letter { animation: intro-letter 650ms cubic-bezier(0.34, 1.56, 0.5, 1) calc(var(--i) * 45ms + 250ms) backwards; }
+@keyframes intro-letter { from { opacity: 0; transform: translateY(0.7em) rotate(-10deg); } }
+
 .intro-caret { animation: caret 0.9s steps(1) infinite; }
 @keyframes caret { 50% { opacity: 0; } }
 /* Without full motion the logo fades away instead of flying to the header. */
@@ -246,7 +301,7 @@ html[data-pin-header] footer {
 /* ---------- The home page deck: full-screen scenes that swap instead of scrolling ---------- */
 html[data-deck] { overflow: hidden; overscroll-behavior: none; }
 
-.deck { position: fixed; inset: 4rem 0 0 0; overflow: hidden; }
+.deck { position: fixed; inset: 4rem 0 0 0; overflow: hidden; overflow: clip; } /* clip: the deck can never get scrolled sideways by zooming scenes */
 .slide {
   position: absolute;
   inset: 0;

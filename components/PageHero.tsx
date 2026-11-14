@@ -142,7 +142,7 @@ export default function PageHero({
   return (
     <header
       style={{ "--tone": TONES[kind] } as React.CSSProperties}
-      className="overflow-hidden border-b-[3px] border-ink bg-[color-mix(in_srgb,var(--tone)_22%,var(--background))]"
+      className="overflow-hidden border-b border-line bg-[color-mix(in_srgb,var(--tone)_6%,var(--surface))]"
     >
       <div
         className={`mx-auto grid max-w-6xl items-center gap-8 px-4 py-12 sm:px-6 lg:py-16 ${

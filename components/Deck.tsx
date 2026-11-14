@@ -1,5 +1,6 @@
 "use client";
 
+import { CaretDown } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { usePinHeader } from "@/components/SiteHeader";
 
@@ -139,6 +140,19 @@ export default function Deck({
           {node}
         </section>
       ))}
+
+      {index < slides.length - 1 && (
+        <button
+          type="button"
+          onClick={() => goTo(index + 1)}
+          className={`nudge absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 flex-col items-center text-sm font-medium transition-colors ${
+            dark[index] ? "text-white/80 hover:text-white" : "text-muted hover:text-ink"
+          }`}
+        >
+          Scroll to see more
+          <CaretDown aria-hidden="true" size={20} weight="bold" />
+        </button>
+      )}
 
       <nav aria-label="Sections" className="absolute right-3 top-1/2 z-10 flex -translate-y-1/2 flex-col gap-1 sm:right-5">
         {labels.map((label, i) => (

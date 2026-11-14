@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Bricolage_Grotesque, Figtree, Geist_Mono } from "next/font/google";
+import { Bricolage_Grotesque, Figtree, Geist_Mono, Inter_Tight } from "next/font/google";
 import Link from "next/link";
 import Intro from "@/components/Intro";
 import SiteHeader from "@/components/SiteHeader";
@@ -9,6 +9,13 @@ import "./globals.css";
 
 const display = Bricolage_Grotesque({
   variable: "--font-bric",
+  subsets: ["latin"],
+});
+
+/* Clean headings for the working pages (close to the team's Figma design). The opening screen,
+   the home page and the logo keep Bricolage. */
+const heading = Inter_Tight({
+  variable: "--font-heading",
   subsets: ["latin"],
 });
 
@@ -39,7 +46,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${display.variable} ${body.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${display.variable} ${heading.variable} ${body.variable} ${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
       <head>

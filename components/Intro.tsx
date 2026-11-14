@@ -3,10 +3,22 @@
 import { useEffect, useRef, useState } from "react";
 
 const MOTTO = "Making Model UN possible for everyone around the globe.";
+const NAME = "BridgeMUN";
+
+/* Floating circles: each pops in at its own moment and drifts at its own pace. */
+const BLOBS = [
+  { background: "var(--sun)", left: "8%", top: "14%", width: "9rem", "--delay": "0ms", "--d": "3.4s", "--fx": "6px" },
+  { background: "var(--cyan)", right: "10%", top: "22%", width: "6rem", "--delay": "120ms", "--d": "2.9s", "--fx": "-8px" },
+  { background: "var(--coral)", left: "16%", bottom: "16%", width: "5rem", "--delay": "240ms", "--d": "3.8s", "--fx": "10px" },
+  { background: "var(--mint)", right: "14%", bottom: "12%", width: "8rem", "--delay": "360ms", "--d": "3.1s", "--fx": "-6px" },
+  { background: "var(--violet)", left: "34%", top: "8%", width: "2.5rem", "--delay": "480ms", "--d": "2.6s", "--fx": "12px" },
+  { background: "var(--sun)", right: "30%", bottom: "8%", width: "3rem", "--delay": "600ms", "--d": "3.6s", "--fx": "-10px" },
+];
+
 
 /* Plays once each time the home page is opened or reloaded. An inline script in the layout sets
    data-intro on <html> before the first paint, which locks scrolling and hides the header logo.
-   Here the logo pops up, the motto types itself out, and the logo flies to its place in the header.
+   Here the circles pop in, the bridge draws itself, the letters hop in, the motto types itself out, and the logo flies to its place in the header.
    Any click, key or scroll skips ahead. */
 export default function Intro() {
   const [typed, setTyped] = useState(0);
@@ -79,10 +91,9 @@ export default function Intro() {
   return (
     <div className="intro" aria-hidden="true" data-flying={fly ? "true" : "false"}>
       <div className="intro-bg">
-        <span className="intro-blob" style={{ background: "var(--sun)", left: "8%", top: "14%", width: "9rem" }} />
-        <span className="intro-blob" style={{ background: "var(--cyan)", right: "10%", top: "22%", width: "6rem" }} />
-        <span className="intro-blob" style={{ background: "var(--coral)", left: "16%", bottom: "16%", width: "5rem" }} />
-        <span className="intro-blob" style={{ background: "var(--mint)", right: "14%", bottom: "12%", width: "8rem" }} />
+        {BLOBS.map((b, i) => (
+          <span key={i} className="intro-blob" style={b as React.CSSProperties} />
+        ))}
       </div>
       <div className="intro-stage">
         <div
@@ -91,12 +102,18 @@ export default function Intro() {
           style={fly ? { transform: fly } : undefined}
         >
           <div className="intro-pop flex items-center gap-[0.4em] font-display text-5xl font-bold tracking-tight sm:text-7xl">
-            <svg viewBox="0 0 32 32" className="size-[1.4em] text-accent">
-              <path d="M2 21h28" stroke="currentColor" strokeWidth="3" strokeLinecap="round" fill="none" />
-              <path d="M6 21V8m20 13V8M6 8c5 9 15 9 20 0" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" fill="none" />
-              <path d="M16 17.2V21" stroke="var(--sun)" strokeWidth="2.4" strokeLinecap="round" />
+            <svg viewBox="0 0 32 32" className="intro-draw size-[1.4em] text-accent">
+              <path d="M2 21h28" stroke="currentColor" strokeWidth="3" strokeLinecap="round" fill="none" pathLength={1} />
+              <path d="M6 21V8m20 13V8M6 8c5 9 15 9 20 0" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" fill="none" pathLength={1} />
+              <path d="M16 17.2V21" stroke="var(--sun)" strokeWidth="2.4" strokeLinecap="round" pathLength={1} />
             </svg>
-            <span translate="no">BridgeMUN</span>
+            <span translate="no" aria-label={NAME}>
+              {NAME.split("").map((ch, i) => (
+                <span key={i} className="intro-letter" style={{ "--i": i } as React.CSSProperties}>
+                  {ch}
+                </span>
+              ))}
+            </span>
           </div>
         </div>
         <p className="intro-motto font-display text-xl font-semibold sm:text-3xl">
