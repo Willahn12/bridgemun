@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -H 0.0.0.0 -p ${PORT:-3000}",
     "lint": "eslint",
     "emulators": "firebase emulators:start --only auth,firestore --project demo-bridgemun --import .emulator-data --export-on-exit .emulator-data",
     "dev:emu": "NEXT_PUBLIC_USE_EMULATORS=1 next dev"
@@ -30,5 +30,8 @@
     "firebase-tools": "^14.27.0",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=20.9.0"
   }
 }
