@@ -1,3 +1,4 @@
+import { guard } from "@/lib/apiGuard";
 import { NextResponse } from "next/server";
 import { complete, llmConfigured } from "@/lib/llm";
 
@@ -12,6 +13,8 @@ const arr = (v: unknown, max: number) =>
   Array.isArray(v) ? (v as Record<string, unknown>[]).filter((x) => x && typeof x === "object").slice(0, max) : [];
 
 export async function POST(req: Request) {
+  const blocked = await guard(req, "coach", 6);
+  if (blocked) return blocked;
   if (!llmConfigured()) {
     return NextResponse.json({ error: "OPENAI_API_KEY is not set on the server." }, { status: 500 });
   }
@@ -88,7 +91,7 @@ Return JSON only in exactly this shape:
     if (!coach.overview) throw new Error("Empty coaching");
     return NextResponse.json({ coach });
   } catch (e) {
-    const detail = e instanceof Error ? e.message : "Unknown error";
-    return NextResponse.json({ error: "Coaching could not be created.", detail }, { status: 502 });
+    console.error(e);
+    return NextResponse.json({ error: "Coaching could not be created." }, { status: 502 });
   }
 }

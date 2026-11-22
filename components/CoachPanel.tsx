@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { GraduationCap, Sparkle } from "@phosphor-icons/react";
 import type { Coach, Session } from "@/lib/sessions";
+import { apiFetch } from "@/lib/apiFetch";
 
 export default function CoachPanel({ session, onCoach }: { session: Session; onCoach: (c: Coach) => void }) {
   const coach = session.report?.coach;
@@ -13,7 +14,7 @@ export default function CoachPanel({ session, onCoach }: { session: Session; onC
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch("/api/coach", {
+      const res = await apiFetch("/api/coach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

@@ -1,3 +1,4 @@
+import { guard } from "@/lib/apiGuard";
 import { NextResponse } from "next/server";
 import { complete, llmConfigured } from "@/lib/llm";
 import { curatedPosition, type Position, type Stance } from "@/lib/positions";
@@ -11,6 +12,8 @@ const list = (v: unknown, n: number, len: number) =>
   Array.isArray(v) ? v.filter((x): x is string => short(x, len)).map((x) => x.trim()).slice(0, n) : [];
 
 export async function POST(req: Request) {
+  const blocked = await guard(req, "positions", 10);
+  if (blocked) return blocked;
   const b = (await req.json().catch(() => null)) as { committee?: unknown; topic?: unknown; countries?: unknown } | null;
   if (!b || !short(b.committee, 200) || !short(b.topic, 300) || !Array.isArray(b.countries)) {
     return NextResponse.json({ error: "Invalid request." }, { status: 400 });

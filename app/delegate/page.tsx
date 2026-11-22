@@ -31,14 +31,9 @@ function Delegate() {
   useEffect(() => {
     if (!openId || openAttempted) return;
     const cached = saved.find((s) => s.id === openId);
-    if (cached) {
-      setOpenAttempted(true);
-      setView({ step: "session", session: cached, save: true });
-      router.replace("/delegate");
-      return;
-    }
     let cancelled = false;
-    getSession(openId).then((s) => {
+    // A saved copy opens at once; otherwise it is fetched. Either way the state changes after the effect.
+    (cached ? Promise.resolve(cached) : getSession(openId)).then((s) => {
       if (cancelled) return;
       setOpenAttempted(true);
       if (s) {

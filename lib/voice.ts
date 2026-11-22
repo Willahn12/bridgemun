@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { apiFetch } from "@/lib/apiFetch";
 
 /* ---------- Speech to text (browser Web Speech API, free) ---------- */
 
@@ -180,7 +181,7 @@ async function fetchChunk(text: string, voice: number): Promise<Fetched> {
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt) await new Promise((r) => setTimeout(r, 500 * attempt));
     try {
-      const res = await fetch("/api/tts", {
+      const res = await apiFetch("/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, voice }),

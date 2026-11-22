@@ -38,6 +38,7 @@ import {
   type Report,
   type Session,
 } from "@/lib/sessions";
+import { apiFetch } from "@/lib/apiFetch";
 
 interface Speech {
   country: string;
@@ -214,7 +215,7 @@ export default function SessionView({
   const call = useCallback(
     async (directive: Directive, only?: string, extra?: Record<string, unknown>, onPartial?: (p: Partial) => void) => {
       const caucus = procRef.current.caucus;
-      const res = await fetch("/api/delegate", {
+      const res = await apiFetch("/api/delegate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -304,7 +305,7 @@ export default function SessionView({
     setReporting(true);
     setError(null);
     try {
-      const res = await fetch("/api/report", {
+      const res = await apiFetch("/api/report", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -436,7 +437,7 @@ export default function SessionView({
   async function loadPositions() {
     if (positionsRef.current.length || !aiCountries.length) return;
     try {
-      const res = await fetch("/api/positions", {
+      const res = await apiFetch("/api/positions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ committee: initial.committee, topic: initial.topic, countries: aiCountries }),
@@ -942,7 +943,10 @@ export default function SessionView({
               disabled={thinking || reporting}
               onClick={() => {
                 silence();
-                adjourn();
+                // From general debate, go through closing statements (and the resolution vote) instead of skipping them.
+                if (judge && structured && phase === "debate")
+                  beginClosing("The chair closes general debate. Closing statements will now be heard in the same order as the opening.");
+                else adjourn();
               }}
             >
               {judge ? "Judge: end session" : "End and get report"}

@@ -53,6 +53,7 @@ import {
   type RoomPhase,
   type TurnEntry,
 } from "@/lib/rooms";
+import { apiFetch } from "@/lib/apiFetch";
 
 const JUDGE_VOICE = 5;
 const DEBATE_ROUNDS = 2;
@@ -177,6 +178,9 @@ export default function RoomPage() {
   const [requests, setRequests] = useState<RoomRequest[]>([]);
   const requestsRef = useRef<RoomRequest[]>([]);
   const closeDebateRef = useRef(false);
+  // The host pressed End once: skip what is left of openings and debate, but still hear closing statements.
+  const endRequestedRef = useRef(false);
+  const [wrapping, setWrapping] = useState(false);
   const stageRef = useRef<Stage | null>(null); // the stage the engine is running, ahead of the stored phase
   const extraRoundsRef = useRef(0);
   const [procOpen, setProcOpen] = useState<null | "point" | "motion" | "resolution">(null);
@@ -362,6 +366,7 @@ export default function RoomPage() {
     async (directive: "open" | "reply" | "adjourn" | "opening" | "closing" | "point", only?: string, order?: string[], extra?: Record<string, unknown>) => {
       const r = roomRef.current;
       if (!r) return true;
+      const token = flowTokenRef.current;
       setAiBusy(true);
       setError(null);
       let body: { chair?: string; speeches?: { country: string; text: string }[]; error?: string } | null = null;
@@ -371,7 +376,7 @@ export default function RoomPage() {
         if (attempt) await sleep(1200 * attempt);
         try {
           const humans = membersRef.current.filter((m) => !m.moderator).map((m) => m.country || m.name);
-          const res = await fetch("/api/delegate", {
+          const res = await apiFetch("/api/delegate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -404,8 +409,15 @@ export default function RoomPage() {
           setError(friendlyRoomError(failure));
           return false;
         }
+        // A reply that comes back after the host ended the forum (or the flow restarted) is not posted,
+        // so no speech appears after "adjourned". The adjourn line itself always goes through.
+        const stale = () => directive !== "adjourn" && (flowTokenRef.current !== token || finishingRef.current);
+        if (stale()) return true;
         if (body.chair) await post("chair", "Judge", body.chair);
-        for (const s of body.speeches ?? []) await post("ai", s.country, s.text);
+        for (const s of body.speeches ?? []) {
+          if (stale()) break;
+          await post("ai", s.country, s.text);
+        }
         return true;
       } catch (e) {
         setError(friendlyRoomError(e instanceof Error ? e.message : "The AI could not respond."));
@@ -522,7 +534,7 @@ export default function RoomPage() {
       if (r.voting?.status === "open") await closeVote();
       await patchRoom({ turn_user: null, turn_deadline: null }, { turnUser: null, turnDeadline: null });
       if (r.judge) await runAi("adjourn");
-      const res = await fetch("/api/report", {
+      const res = await apiFetch("/api/report", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -570,7 +582,7 @@ export default function RoomPage() {
       await patchRoom({ voting }, { voting });
       const ai = activeAi(r);
       const aiVotes = ai.length
-        ? fetch("/api/delegate", {
+        ? apiFetch("/api/delegate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -762,6 +774,7 @@ export default function RoomPage() {
           let i = si === first ? startCursor : 0;
           const more = () => {
             if (timeLeft() <= 0 || !active()) return false;
+            if (stage === "opening" && endRequestedRef.current) return false;
             if (stage === "debate") {
               if (closeDebateRef.current) return false; // a motion to close debate passed
               const c = roomRef.current?.caucus;
@@ -864,7 +877,7 @@ export default function RoomPage() {
       setQuestion("");
       const ai = activeAi(r);
       const aiVotes = ai.length
-        ? fetch("/api/delegate", {
+        ? apiFetch("/api/delegate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -921,7 +934,7 @@ export default function RoomPage() {
       // Where each AI delegation stands, so their speeches and votes stay true to their country.
       const aiNames = [...new Set([...ais.map((a) => a.name), ...(r.seats ?? []).filter((s) => s.ai).map((s) => s.country)])];
       const positions: Position[] = aiNames.length
-        ? await fetch("/api/positions", {
+        ? await apiFetch("/api/positions", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ committee: r.committee, topic: agenda(r), countries: aiNames }),
@@ -942,6 +955,20 @@ export default function RoomPage() {
       setStarting(false);
       startingRef.current = false;
     }
+  }
+
+  /* "End forum session": the first press closes debate and goes to closing statements (then any resolution
+     votes and the report), like a real chair. Pressing again, or when the flow is not running, ends at once. */
+  async function requestEnd() {
+    const stage = stageRef.current ?? roomRef.current?.phase;
+    if (!endRequestedRef.current && flowRunRef.current && stage !== "closing") {
+      endRequestedRef.current = true;
+      closeDebateRef.current = true;
+      setWrapping(true);
+      waiterRef.current?.done("cancel");
+      return;
+    }
+    await endEarly();
   }
 
   async function endEarly() {
@@ -1684,8 +1711,8 @@ export default function RoomPage() {
                 </span>
               </h2>
               {isHost && live && (
-                <button type="button" className="btn border-danger text-danger" disabled={ending} onClick={endEarly}>
-                  {ending ? "Ending…" : "End forum session"}
+                <button type="button" className="btn border-danger text-danger" disabled={ending} onClick={requestEnd}>
+                  {ending ? "Ending…" : wrapping ? "End now (skip closing statements)" : "End forum session"}
                 </button>
               )}
             </div>

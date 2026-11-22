@@ -76,10 +76,21 @@ export async function listMyOrgs(userId: string): Promise<Org[]> {
 }
 
 export async function getOrg(orgId: string, userId: string): Promise<Org | null> {
-  const [orgSnap, memberSnap] = await Promise.all([getDoc(doc(db(), "organizations", orgId)), myMembershipIn(orgId, userId)]);
-  if (!orgSnap.exists() || !memberSnap) return null;
+  // Only members may read an organization (firestore.rules), so check the membership first.
+  const memberSnap = await myMembershipIn(orgId, userId);
+  if (!memberSnap) return null;
+  const orgSnap = await getDoc(doc(db(), "organizations", orgId));
+  if (!orgSnap.exists()) return null;
   const o = orgSnap.data();
-  return { id: orgSnap.id, name: o.name as string, inviteCode: o.inviteCode as string, role: memberSnap.data().role as Role };
+  const role = memberSnap.data().role as Role;
+  // Organizations made before invites/ existed get their invite lookup the first time a teacher opens them.
+  if (isStaff(role) && o.inviteCode) {
+    const inv = doc(db(), "invites", o.inviteCode as string);
+    getDoc(inv)
+      .then((s) => (s.exists() ? null : setDoc(inv, { orgId, createdAt: serverTimestamp() })))
+      .catch(() => {});
+  }
+  return { id: orgSnap.id, name: o.name as string, inviteCode: o.inviteCode as string, role };
 }
 
 export async function createOrg(name: string): Promise<string> {
@@ -90,8 +101,7 @@ export async function createOrg(name: string): Promise<string> {
 
   let code = randomCode();
   for (let i = 0; i < 5; i++) {
-    const existing = await getDocs(query(collection(db(), "organizations"), where("inviteCode", "==", code)));
-    if (existing.empty) break;
+    if (!(await getDoc(doc(db(), "invites", code))).exists()) break;
     code = randomCode();
   }
 
@@ -105,20 +115,24 @@ export async function createOrg(name: string): Promise<string> {
     name: name2,
     joinedAt: serverTimestamp(),
   });
+  // The code -> organization lookup that joinOrg uses. Organizations themselves are readable only by members.
+  await setDoc(doc(db(), "invites", code), { orgId: orgRef.id, createdAt: serverTimestamp() });
   return orgRef.id;
 }
 
 export async function joinOrg(code: string): Promise<string> {
   const uid = currentUser()?.id;
   if (!uid) throw new Error("Sign in first.");
-  const snap = await getDocs(query(collection(db(), "organizations"), where("inviteCode", "==", code.trim().toUpperCase())));
-  if (snap.empty) throw new Error("Invalid invite code.");
-  const orgId = snap.docs[0].id;
+  const clean = code.trim().toUpperCase();
+  if (!/^[A-Z0-9]{4,12}$/.test(clean)) throw new Error("Invalid invite code.");
+  const invite = await getDoc(doc(db(), "invites", clean));
+  if (!invite.exists()) throw new Error("Invalid invite code.");
+  const orgId = invite.data().orgId as string;
 
   const memberRef = doc(db(), "memberships", membershipId(orgId, uid));
   if (!(await myMembershipIn(orgId, uid))) {
     const name = await myDisplayName(uid);
-    await setDoc(memberRef, { orgId, userId: uid, role: "student", name, joinedAt: serverTimestamp() });
+    await setDoc(memberRef, { orgId, userId: uid, role: "student", name, inviteCode: clean, joinedAt: serverTimestamp() });
   }
   return orgId;
 }
@@ -148,6 +162,8 @@ export async function removeMember(orgId: string, userId: string) {
 }
 
 export async function deleteOrg(orgId: string) {
+  const code = (await getDoc(doc(db(), "organizations", orgId))).data()?.inviteCode as string | undefined;
+  if (code) await deleteDoc(doc(db(), "invites", code)).catch(() => {});
   await deleteDoc(doc(db(), "organizations", orgId));
 }
 

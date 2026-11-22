@@ -106,7 +106,11 @@ export default function FriendsPage() {
   const userId = user?.id;
   useEffect(() => {
     if (!userId) return;
-    myFriendCode().then(setCode).catch(() => setCode(null));
+    // One retry: right after sign-up the profile write can lose a race with this first read.
+    myFriendCode()
+      .catch(() => new Promise<string>((ok, fail) => setTimeout(() => myFriendCode().then(ok, fail), 1500)))
+      .then(setCode)
+      .catch(() => setError("Your friend code could not be loaded. Refresh the page to try again."));
     return watchFriendships(userId, setFriends, (e) => setError(e.message));
   }, [userId]);
 

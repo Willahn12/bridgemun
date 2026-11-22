@@ -33,7 +33,7 @@ export default function PositionsPanel({ positions, className = "" }: { position
                 {p.sources.map((s, i) => (
                   <span key={s.url}>
                     {i > 0 && "; "}
-                    <a href={s.url} target="_blank" rel="noreferrer" className="underline underline-offset-2 hover:text-ink">
+                    <a href={/^https?:\/\//i.test(s.url) ? s.url : undefined} target="_blank" rel="noreferrer" className="underline underline-offset-2 hover:text-ink">
                       {s.title}
                     </a>
                   </span>

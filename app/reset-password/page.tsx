@@ -21,7 +21,7 @@ function ResetPasswordForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const oobCode = searchParams.get("oobCode");
-  const [checking, setChecking] = useState(true);
+  const [checking, setChecking] = useState(() => !!oobCode);
   const [validCode, setValidCode] = useState(false);
   const [password, setPassword] = useState("");
   const [again, setAgain] = useState("");
@@ -29,10 +29,7 @@ function ResetPasswordForm() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!oobCode) {
-      setChecking(false);
-      return;
-    }
+    if (!oobCode) return;
     verifyPasswordResetCode(auth(), oobCode)
       .then(() => setValidCode(true))
       .catch(() => setValidCode(false))

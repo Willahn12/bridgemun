@@ -48,15 +48,23 @@ service cloud.firestore {
     }
 
     // ---------- Organizations and roles ----------
-    // Any signed-in user may read basic org info: createOrg/joinOrg look organizations up by
-    // invite code before the caller is a member, and Firestore can't prove a get()-based list
-    // rule here is safe for that query shape, the same reasoning as the `rooms` collection below.
+    // Only members can read an organization (it holds the invite code). Joining goes through
+    // invites/{code}, which can be fetched only by someone who already knows the code.
     match /organizations/{orgId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && isOrgMember(orgId);
       allow create: if signedIn()
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.name.size() >= 2 && request.resource.data.name.size() <= 120;
       allow update, delete: if signedIn() && isOrgAdmin(orgId);
+    }
+
+    // Invite code -> organization. A single get by code only (no listing), so codes can't be harvested.
+    match /invites/{code} {
+      allow get: if signedIn();
+      allow create: if signedIn()
+        && isOrgStaff(request.resource.data.orgId)
+        && get(/databases/$(database)/documents/organizations/$(request.resource.data.orgId)).data.inviteCode == code;
+      allow delete: if signedIn() && isOrgAdmin(resource.data.orgId);
     }
 
     match /memberships/{id} {
@@ -66,7 +74,11 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.resource.data.userId == request.auth.uid
         && (
-          request.resource.data.role == 'student'
+          (
+            request.resource.data.role == 'student'
+            // Students join only with the class's invite code.
+            && get(/databases/$(database)/documents/invites/$(request.resource.data.inviteCode)).data.orgId == request.resource.data.orgId
+          )
           || (
             request.resource.data.role == 'admin'
             && get(/databases/$(database)/documents/organizations/$(request.resource.data.orgId)).data.createdBy == request.auth.uid
@@ -116,6 +128,7 @@ service cloud.firestore {
         && isOrgMember(get(/databases/$(database)/documents/channels/$(resource.data.channelId)).data.orgId);
       allow create: if signedIn()
         && request.resource.data.userId == request.auth.uid
+        && request.resource.data.body is string && request.resource.data.body.size() <= 2000
         && isOrgMember(get(/databases/$(database)/documents/channels/$(request.resource.data.channelId)).data.orgId);
       allow delete: if signedIn() && (
         resource.data.userId == request.auth.uid
@@ -243,6 +256,7 @@ service cloud.firestore {
         allow read: if signedIn() && request.auth.uid in friendship(fid).users;
         allow create: if signedIn()
           && request.resource.data.by == request.auth.uid
+          && request.resource.data.text is string && request.resource.data.text.size() <= 4000
           && request.auth.uid in friendship(fid).users
           && friendship(fid).status == 'accepted';
         allow delete: if signedIn() && request.auth.uid in friendship(fid).users;

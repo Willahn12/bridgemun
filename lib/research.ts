@@ -19,6 +19,7 @@ import {
 import { db } from "@/lib/firebase";
 import { currentUser } from "@/lib/auth";
 import { myDisplayName } from "@/lib/orgs";
+import { apiFetch } from "@/lib/apiFetch";
 
 /* Saved research briefings in Firestore (`research`). The owner can share one by link: anyone signed in
    who opens the link can join as a collaborator and add follow-up questions and notes. The document id is
@@ -189,7 +190,7 @@ export async function streamResearch(
   body: Record<string, unknown>,
   onText: (textSoFar: string) => void,
 ): Promise<{ text: string; sources: Source[] }> {
-  const res = await fetch("/api/research", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const res = await apiFetch("/api/research", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!res.ok || !res.body) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { error?: string }).error ?? "Request failed");

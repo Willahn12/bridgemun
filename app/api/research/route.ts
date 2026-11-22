@@ -1,3 +1,4 @@
+import { guard } from "@/lib/apiGuard";
 import { isSetup, llmConfigured, researchStream } from "@/lib/llm";
 
 /* Research briefings and follow-up questions, streamed as they are written. The model may search the web,
@@ -35,6 +36,8 @@ Search the web if the answer depends on facts, recent events or positions. Answe
 const short = (v: unknown, n: number) => typeof v === "string" && v.trim().length > 0 && v.length <= n;
 
 export async function POST(req: Request) {
+  const blocked = await guard(req, "research", 6);
+  if (blocked) return blocked;
   if (!llmConfigured()) return Response.json({ error: "OPENAI_API_KEY is not set on the server." }, { status: 500 });
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
   if (!isSetup(body)) return Response.json({ error: "Country, committee and topic are all required." }, { status: 400 });
@@ -53,7 +56,8 @@ export async function POST(req: Request) {
       try {
         for await (const ev of researchStream({ system: followup ? FOLLOWUP : BRIEF, input, maxTokens: followup ? 900 : 2600 })) send(ev);
       } catch (e) {
-        send({ type: "error", error: "The research request failed.", detail: e instanceof Error ? e.message : "Unknown error" });
+        send({ type: "error", error: "The research request failed." });
+          console.error(e);
       } finally {
         controller.close();
       }

@@ -1,3 +1,4 @@
+import { guard } from "@/lib/apiGuard";
 import { NextResponse } from "next/server";
 import { complete, llmConfigured } from "@/lib/llm";
 
@@ -5,6 +6,8 @@ interface Line {
   speaker: string;
   kind: "human" | "ai" | "chair";
   text: string;
+  point?: unknown;
+  resolution?: unknown;
 }
 
 const CRITERIA = ["Clarity", "Argument and evidence", "Country position", "Diplomatic language", "Engaging with others"];
@@ -14,6 +17,8 @@ const list = (v: unknown, max: number, n: number) =>
   Array.isArray(v) ? v.map((x) => str(x, n)).filter(Boolean).slice(0, max) : [];
 
 export async function POST(req: Request) {
+  const blocked = await guard(req, "report", 6);
+  if (blocked) return blocked;
   if (!llmConfigured()) {
     return NextResponse.json({ error: "OPENAI_API_KEY is not set on the server." }, { status: 500 });
   }
@@ -25,7 +30,8 @@ export async function POST(req: Request) {
     (l) => l && typeof l.speaker === "string" && typeof l.text === "string" && ["human", "ai", "chair"].includes(l.kind),
   );
   const isTable = b.mode === "table";
-  const humanSpeeches = lines.filter((l) => l.kind === "human" && l.text !== "Yields the floor.");
+  // Points and introducing a draft resolution are not speeches (the report screen counts them the same way).
+  const humanSpeeches = lines.filter((l) => l.kind === "human" && l.text !== "Yields the floor." && !l.point && !l.resolution);
 
   // Nothing to judge: say so instead of asking the model, which would otherwise grade the AI delegations.
   if (!humanSpeeches.length) {
@@ -47,6 +53,7 @@ Evaluate ONLY ${who}, not the AI delegations. Use the transcript below. Only lin
 
 Be encouraging but honest. Do not inflate scores. Refer to specific things they actually said.
 If the student spoke fewer than 2 times, say there was too little to assess fully and score cautiously.
+The number of student speeches is given as "Student speeches" below. If you mention how many times they spoke, use exactly that number; do not count lines yourself.
 
 Score each criterion as a whole number from 1 to 5: ${CRITERIA.join("; ")}.
 Scale: 3 is a solid beginner performance, 4 is clearly strong, 5 is rare and needs standout evidence. Short sessions with only a couple of speeches should rarely score above 3 in "Argument and evidence" or "Engaging with others".
@@ -90,7 +97,7 @@ Give 2 to 4 strengths, 2 to 4 improvements, and 2 to 3 next steps.`;
       },
     });
   } catch (e) {
-    const detail = e instanceof Error ? e.message : "Unknown error";
-    return NextResponse.json({ error: "The report could not be created.", detail }, { status: 502 });
+    console.error(e);
+    return NextResponse.json({ error: "The report could not be created." }, { status: 502 });
   }
 }

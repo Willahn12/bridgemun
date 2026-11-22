@@ -5,6 +5,7 @@ import { ArrowUp, Hash, Trash } from "@phosphor-icons/react";
 import { useOrgContext } from "@/components/org/OrgProvider";
 import {
   createChannel,
+  ensureGeneralChannel,
   deleteMessage,
   listChannels,
   listMessages,
@@ -32,7 +33,10 @@ export default function ChatPage() {
     (async () => {
       try {
         let list = await listChannels(org.id);
-        if (list.length === 0 && isStaff) list = [await createChannel(org.id, "general")];
+        if (list.length === 0 && isStaff) {
+          await ensureGeneralChannel(org.id);
+          list = await listChannels(org.id);
+        }
         if (cancelled) return;
         setChannels(list);
         setActive((cur) => (cur && list.some((c) => c.id === cur) ? cur : (list[0]?.id ?? null)));

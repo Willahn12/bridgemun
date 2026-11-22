@@ -1,3 +1,4 @@
+import { guard } from "@/lib/apiGuard";
 import { NextResponse } from "next/server";
 
 const MAX_CHARS = 2500;
@@ -15,6 +16,8 @@ const VOICES = [
 const MODEL = process.env.ELEVENLABS_MODEL ?? "eleven_flash_v2_5";
 
 export async function POST(req: Request) {
+  const blocked = await guard(req, "tts", 30);
+  if (blocked) return blocked;
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
     return NextResponse.json({ error: "TTS is not configured" }, { status: 500 });
@@ -43,9 +46,9 @@ export async function POST(req: Request) {
   );
 
   if (!upstream.ok) {
-    const detail = await upstream.text();
+    console.error("ElevenLabs", upstream.status, await upstream.text().catch(() => ""));
     return NextResponse.json(
-      { error: "ElevenLabs request failed", status: upstream.status, detail },
+      { error: "The voice could not be made right now." },
       { status: 502 },
     );
   }

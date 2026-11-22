@@ -2,6 +2,8 @@ import type { Source } from "@/lib/research";
 
 /* The pages a briefing or answer cited, with their sites, so students can read them in full. */
 export default function SourceList({ sources, title = "Sources" }: { sources: Source[]; title?: string }) {
+  // Saved briefings can be shared, so only plain web links are ever made clickable (never javascript: etc.).
+  sources = sources.filter((s) => /^https?:\/\//i.test(s.url));
   if (!sources.length) return null;
   const site = (url: string) => {
     try {

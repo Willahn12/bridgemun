@@ -1,3 +1,4 @@
+import { guard } from "@/lib/apiGuard";
 import { NextResponse } from "next/server";
 import { complete, completeStream, llmConfigured } from "@/lib/llm";
 import { AI_MOTION_TYPES, MOTION_INFO, type MotionType } from "@/lib/motions";
@@ -279,6 +280,8 @@ function readPartial(raw: string): { chair?: string; speeches: { country: string
 }
 
 export async function POST(req: Request) {
+  const blocked = await guard(req, "delegate", 30);
+  if (blocked) return blocked;
   if (!llmConfigured()) {
     return NextResponse.json({ error: "OPENAI_API_KEY is not set on the server." }, { status: 500 });
   }
@@ -328,7 +331,8 @@ export async function POST(req: Request) {
           }
           send({ type: "final", ...finalize(body, raw, allowed) });
         } catch (e) {
-          send({ type: "error", error: "The delegates could not respond.", detail: e instanceof Error ? e.message : "Unknown error" });
+          send({ type: "error", error: "The delegates could not respond." });
+          console.error(e);
         } finally {
           controller.close();
         }
@@ -341,7 +345,7 @@ export async function POST(req: Request) {
     const raw = await complete(request);
     return NextResponse.json(finalize(body, raw, allowed));
   } catch (e) {
-    const detail = e instanceof Error ? e.message : "Unknown error";
-    return NextResponse.json({ error: "The delegates could not respond.", detail }, { status: 502 });
+    console.error(e);
+    return NextResponse.json({ error: "The delegates could not respond." }, { status: 502 });
   }
 }

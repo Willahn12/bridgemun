@@ -11,6 +11,7 @@ import {
   onSnapshot,
   query,
   setDoc,
+  runTransaction,
   Timestamp,
   updateDoc,
   where,
@@ -72,12 +73,15 @@ const toFriendship = (id: string, d: Record<string, unknown>): Friendship => ({
 export async function myFriendCode(): Promise<string> {
   const uid = me();
   const ref = doc(db(), "users", uid);
-  const snap = await getDoc(ref);
-  const existing = snap.data()?.friendCode as string | undefined;
-  if (existing) return existing;
-  const code = randomCode();
-  await setDoc(ref, { friendCode: code }, { merge: true });
-  return code;
+  // In a transaction, so two tabs (or React running the effect twice) can't each save a different code
+  // and show one that was then overwritten.
+  return runTransaction(db(), async (tx) => {
+    const existing = (await tx.get(ref)).data()?.friendCode as string | undefined;
+    if (existing) return existing;
+    const code = randomCode();
+    tx.set(ref, { friendCode: code }, { merge: true });
+    return code;
+  });
 }
 
 export async function addFriendByCode(code: string): Promise<void> {

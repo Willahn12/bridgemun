@@ -228,6 +228,12 @@ export async function createChannel(orgId: string, name: string): Promise<Channe
   return { id: ref.id, name: cleaned };
 }
 
+/* The automatic "general" channel has a fixed id, so two tabs (or React running the effect twice) can't make
+   two of them: the second write would be an update, which firestore.rules refuses, and that is fine. */
+export async function ensureGeneralChannel(orgId: string): Promise<void> {
+  await setDoc(doc(db(), "channels", `${orgId}_general`), { orgId, name: "general", createdAt: serverTimestamp() }).catch(() => {});
+}
+
 export async function listMessages(channelId: string): Promise<Message[]> {
   const snap = await getDocs(query(collection(db(), "messages"), where("channelId", "==", channelId)));
   return snap.docs
@@ -240,7 +246,7 @@ export async function sendMessage(channelId: string, userId: string, body: strin
   const ref = await addDoc(collection(db(), "messages"), {
     channelId,
     userId,
-    body: body.trim(),
+    body: body.trim().slice(0, 2000),
     createdAt: serverTimestamp(),
   });
   const snap = await getDoc(ref);
