@@ -61,6 +61,15 @@ export async function myDisplayName(userId: string): Promise<string> {
   return (snap.data()?.displayName as string | undefined)?.trim() || "Unnamed";
 }
 
+// Organizations made before invites/ existed get their invite lookup the first time a teacher sees them.
+function ensureInvite(orgId: string, code: unknown) {
+  if (!code) return;
+  const inv = doc(db(), "invites", code as string);
+  getDoc(inv)
+    .then((s) => (s.exists() ? null : setDoc(inv, { orgId, createdAt: serverTimestamp() })))
+    .catch(() => {});
+}
+
 export async function listMyOrgs(userId: string): Promise<Org[]> {
   const snap = await getDocs(query(collection(db(), "memberships"), where("userId", "==", userId)));
   const orgs = await Promise.all(
@@ -69,6 +78,7 @@ export async function listMyOrgs(userId: string): Promise<Org[]> {
       const orgSnap = await getDoc(doc(db(), "organizations", data.orgId as string));
       if (!orgSnap.exists()) return null;
       const o = orgSnap.data();
+      if (isStaff(data.role as Role)) ensureInvite(orgSnap.id, o.inviteCode);
       return { id: orgSnap.id, name: o.name as string, inviteCode: o.inviteCode as string, role: data.role as Role };
     }),
   );
@@ -83,13 +93,7 @@ export async function getOrg(orgId: string, userId: string): Promise<Org | null>
   if (!orgSnap.exists()) return null;
   const o = orgSnap.data();
   const role = memberSnap.data().role as Role;
-  // Organizations made before invites/ existed get their invite lookup the first time a teacher opens them.
-  if (isStaff(role) && o.inviteCode) {
-    const inv = doc(db(), "invites", o.inviteCode as string);
-    getDoc(inv)
-      .then((s) => (s.exists() ? null : setDoc(inv, { orgId, createdAt: serverTimestamp() })))
-      .catch(() => {});
-  }
+  if (isStaff(role)) ensureInvite(orgId, o.inviteCode);
   return { id: orgSnap.id, name: o.name as string, inviteCode: o.inviteCode as string, role };
 }
 
